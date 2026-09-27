@@ -2,7 +2,7 @@ name: Scan WWM redemption codes
 
 on:
   schedule:
-  - cron: "17 0,6,12,18 * * *"  # 改為每 6 小時執行一次 (UTC 0, 6, 12, 18 點)
+  - cron: "17,47 * * * *"  # 每 30 分鐘執行一次
   workflow_dispatch:
     inputs:
       manual_codes:
