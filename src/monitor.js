@@ -6,8 +6,9 @@ const PC_GAMER_URL =
   "https://www.pcgamer.com/games/action/where-winds-meet-codes/";
 const PC_GAMER_HOST = "www.pcgamer.com";
 const YAR_URL = "https://codes.yar.gg/";
-const YAR_API_URL = "https://codes-backend.wwmcodes.workers.dev/v1/codes";
-const YAR_API_HOST = "codes-backend.wwmcodes.workers.dev";
+const YAR_API_URL = "https://codes.yar.gg/api/codes";
+const YAR_API_HOST = "codes.yar.gg";
+const YAR_FALLBACK_URL = "https://codes-backend.wwmcodes.workers.dev/v1/codes";
 const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
 const MAX_REDIRECTS = 3;
 
@@ -57,7 +58,7 @@ function decodeHtmlEntities(text) {
   );
 }
 
-function htmlToText(html) {
+export function htmlToText(html) {
   return decodeHtmlEntities(
     html
       .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
@@ -70,7 +71,7 @@ function htmlToText(html) {
     .trim();
 }
 
-function looksLikeCode(value) {
+export function looksLikeCode(value) {
   const code = value.trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{5,31}$/.test(code)) return false;
 
@@ -255,11 +256,11 @@ function validateUrl(value, expectedHost, label) {
   return url;
 }
 
-async function fetchEntriesFromSource(source) {
+async function fetchEntriesFromSource(source, fetchImpl = fetch) {
   let url = validateUrl(source.url, source.host, source.name);
 
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
-    const response = await fetch(url, {
+    const response = await fetchImpl(url, {
       redirect: "manual",
       headers: {
         "accept-language": source.language,
@@ -316,14 +317,29 @@ export function fetchArlenEntries() {
   });
 }
 
-export function fetchYarEntries() {
-  return fetchEntriesFromSource({
-    name: "Yar",
-    url: YAR_API_URL,
-    host: YAR_API_HOST,
-    language: "en-US,en;q=0.9",
-    parse: (body) => parseYarCodesPayload(JSON.parse(body)),
-  });
+export function fetchSourceText(source, fetchImpl = fetch) {
+  return fetchEntriesFromSource({ ...source, parse: (body) => body }, fetchImpl);
+}
+
+export async function fetchYarEntries(fetchImpl = fetch) {
+  const failures = [];
+  for (const [url, host] of [
+    [YAR_API_URL, YAR_API_HOST],
+    [YAR_FALLBACK_URL, new URL(YAR_FALLBACK_URL).hostname],
+  ]) {
+    try {
+      return await fetchEntriesFromSource({
+        name: "Yar",
+        url,
+        host,
+        language: "en-US,en;q=0.9",
+        parse: (body) => parseYarCodesPayload(JSON.parse(body)),
+      }, fetchImpl);
+    } catch (error) {
+      failures.push(error.message);
+    }
+  }
+  throw new Error(failures.join("; "));
 }
 
 export function fetchPcGamerEntries() {

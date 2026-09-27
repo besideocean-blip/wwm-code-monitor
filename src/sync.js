@@ -2,8 +2,11 @@ import {
   YAR_URL,
   fetchYarEntries,
   normalizeCode,
-  reconcileSourceState,
 } from "./monitor.js";
+import { fetchBahamutReplies } from "./bahamut.js";
+import { reconcileAutomaticState, reconcileManualState } from "./combined-state.js";
+import { appendFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 
 const STATE_TITLE = "[WWM Monitor] State - do not edit";
 const STATE_START = "<!-- wwm-code-state:start -->";
@@ -11,7 +14,6 @@ const STATE_END = "<!-- wwm-code-state:end -->";
 const MAX_STATE_BYTES = 60_000;
 const MAX_EMBED_DESCRIPTION = 3900;
 const ANNOUNCEMENT_SOURCE_URL = YAR_URL;
-const STATE_SOURCE_URL = YAR_URL;
 
 function requireEnvironment(name) {
   const value = process.env[name]?.trim();
@@ -148,42 +150,6 @@ async function postDiscord(webhookUrl, payload) {
   }
 }
 
-function reconcileManualState(previousState, manualEntries, now) {
-  const known = new Map(
-    (previousState?.codes ?? []).map((entry) => [
-      normalizeCode(entry.code),
-      entry,
-    ]),
-  );
-  const newActive = [];
-
-  for (const entry of manualEntries) {
-    const normalized = normalizeCode(entry.code);
-    const previous = known.get(normalized);
-    if (!previous) newActive.push(entry);
-
-    known.set(normalized, {
-      code: entry.code,
-      status: "active",
-      firstSeenAt: previous?.firstSeenAt ?? now,
-      lastSeenAt: now,
-    });
-  }
-
-  return {
-    newActive,
-    state: {
-      initialized: true,
-      sourceUrl: previousState?.sourceUrl ?? STATE_SOURCE_URL,
-      scannedSourceUrl: previousState?.scannedSourceUrl ?? null,
-      updatedAt: now,
-      codes: [...known.values()].sort((a, b) =>
-        a.code.localeCompare(b.code, "en", { sensitivity: "base" }),
-      ),
-    },
-  };
-}
-
 function chunkCodeLines(entries) {
   const chunks = [];
   let current = [];
@@ -205,83 +171,88 @@ function chunkCodeLines(entries) {
   return chunks;
 }
 
-async function postCodeEmbeds(webhookUrl, title, entries) {
-  for (const lines of chunkCodeLines(entries)) {
-    await postDiscord(webhookUrl, {
-      embeds: [
-        {
-          title,
-          description: lines.join("\n"),
-          color: 0x2f9e44,
-          url: ANNOUNCEMENT_SOURCE_URL,
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
-  }
+export function buildCodeEmbeds(title, entries, source = {}) {
+  return chunkCodeLines(entries).map((lines) => ({
+    embeds: [
+      {
+        title,
+        description: lines.join("\n"),
+        color: 0x2f9e44,
+        url: source.url ?? ANNOUNCEMENT_SOURCE_URL,
+        timestamp: new Date().toISOString(),
+        ...(source.source === "bahamut" ? {
+          footer: { text: `巴哈姆特第 ${source.floor} 樓｜玩家分享，尚未驗證` },
+        } : {}),
+      },
+    ],
+  }));
 }
 
-function isTemporarySourceBlock(error) {
-  return /HTTP (403|429)\b/.test(error?.message ?? "");
+async function postCodeEmbeds(webhookUrl, title, entries, source) {
+  for (const payload of buildCodeEmbeds(title, entries, source)) {
+    await postDiscord(webhookUrl, payload);
+  }
 }
 
 function isSourceScanEnabled() {
   return process.env.SOURCE_SCAN_ENABLED !== "false";
 }
 
-function mergeSourceEntries(target, entries) {
-  for (const entry of entries) {
-    const normalized = normalizeCode(entry.code);
-    const previous = target.get(normalized);
-    if (previous?.status === "expired") continue;
-
-    if (!previous || entry.status === "expired") {
-      target.set(normalized, {
-        code: normalized,
-        status: entry.status,
-      });
-    }
-  }
-}
-
-async function fetchConfiguredSourceEntries() {
+export async function scanSources(previousState, {
+  fetchYar = fetchYarEntries,
+  fetchBahamut = fetchBahamutReplies,
+  bahamutEnabled = process.env.BAHAMUT_SCAN_ENABLED !== "false",
+  maxPages = Number(process.env.BAHAMUT_MAX_PAGES || 8),
+} = {}) {
   const sources = [
-    { name: "Yar", fetchEntries: fetchYarEntries },
+    { name: "YAR", key: "yarEntries", run: () => fetchYar() },
+    ...(bahamutEnabled ? [{
+      name: "Bahamut", key: "bahamut",
+      run: () => fetchBahamut(previousState?.bahamut, { maxPages }),
+    }] : []),
   ];
-  const entries = new Map();
-  const failures = [];
-
-  for (const source of sources) {
-    try {
-      const sourceEntries = await source.fetchEntries();
-      mergeSourceEntries(entries, sourceEntries);
-
-      const active = sourceEntries.filter(
-        (entry) => entry.status === "active",
-      ).length;
-      const expired = sourceEntries.filter(
-        (entry) => entry.status === "expired",
-      ).length;
-      console.log(
-        `${source.name} source loaded: ${active} active, ${expired} expired.`,
-      );
-    } catch (error) {
-      failures.push(`${source.name}: ${error.message}`);
-      console.warn(`${source.name} source failed: ${error.message}`);
+  const output = { yarEntries: null, bahamut: null, failures: [] };
+  const results = await Promise.allSettled(sources.map((source) => source.run()));
+  for (const [index, result] of results.entries()) {
+    const source = sources[index];
+    if (result.status === "fulfilled") {
+      output[source.key] = result.value;
+      console.log(`${source.name} source loaded.`);
+    } else {
+      const message = `${source.name}: ${result.reason?.message ?? "source read failed"}`;
+      output.failures.push(message);
+      console.warn(`Source failed: ${message}`);
     }
   }
-
-  if (entries.size === 0) {
-    throw new Error(`All configured sources failed. ${failures.join(" | ")}`);
+  if (!output.yarEntries && !output.bahamut) {
+    throw new Error(`All configured sources failed; state unchanged. ${output.failures.join(" | ")}`);
   }
-
-  return [...entries.values()];
+  return output;
 }
 
-async function main() {
+async function writeScanSummary(snapshot, result, dryRun) {
+  const count = result.announcements.reduce((total, item) => total + item.entries.length, 0);
+  const newBaseline = `${dryRun ? "預計" : "本次"}建立，既有內容不公告`;
+  const lines = [
+    `## 兌換碼掃描${dryRun ? "（預覽，不發送、不寫入）" : ""}`,
+    "",
+    `- YAR：${snapshot.yarEntries ? `讀取成功，${snapshot.yarEntries.filter((item) => item.status === "active").length} 組可用碼` : "讀取失敗，保留原紀錄"}`,
+    `- 巴哈：${snapshot.bahamut ? `讀取成功，${snapshot.bahamut.pagesRead} 頁，最新第 ${snapshot.bahamut.lastFloor} 樓` : "未讀取成功或已停用，保留原進度"}`,
+    `- 本次${dryRun ? "預計" : "待"}通知：${count} 組`,
+    `- YAR 基準：${result.yarFirstRun ? newBaseline : "未變更"}`,
+    `- 巴哈基準：${result.bahamutFirstRun ? newBaseline : "未變更"}`,
+    ...snapshot.failures.map((message) => `- 注意：${message.replace(/[\r\n]/g, " ")}`),
+    "",
+  ];
+  console.log(lines.join("\n"));
+  if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, lines.join("\n"));
+}
+
+export async function main() {
   const repository = validateRepository(requireEnvironment("GH_REPOSITORY"));
   const githubToken = requireEnvironment("GH_STATE_TOKEN");
-  const webhookUrl = validateWebhookUrl(
+  const dryRun = process.env.DRY_RUN === "true";
+  const webhookUrl = dryRun ? null : validateWebhookUrl(
     requireEnvironment("DISCORD_WEBHOOK_URL"),
   );
   const now = new Date().toISOString();
@@ -295,14 +266,14 @@ async function main() {
       now,
     );
 
-    await saveState(repository, githubToken, stored.issue, result.state);
-
-    if (result.newActive.length > 0) {
+    encodeState(result.state); // Validate size before any external announcement.
+    if (!dryRun && result.newActive.length > 0) {
       await postCodeEmbeds(webhookUrl, "玩家回報新兌換碼", result.newActive);
     }
+    if (!dryRun) await saveState(repository, githubToken, stored.issue, result.state);
 
     console.log(
-      `Manual report checked ${manualEntries.length} code(s), added ${result.newActive.length}.`,
+      `${dryRun ? "Preview: " : ""}Manual report checked ${manualEntries.length} code(s), found ${result.newActive.length} new.`,
     );
     return;
   }
@@ -314,55 +285,38 @@ async function main() {
     return;
   }
 
-  let entries;
-  try {
-    entries = await fetchConfiguredSourceEntries();
-  } catch (error) {
-    if (!isTemporarySourceBlock(error)) throw error;
-
-    console.warn(`Source temporarily blocked: ${error.message}`);
-    console.warn("This run was skipped. Manual /report still works.");
-    return;
-  }
-
   const stored = await loadStateIssue(repository, githubToken);
-  const result = reconcileSourceState(
-    stored.state,
-    entries,
-    now,
-    STATE_SOURCE_URL,
-  );
+  const snapshot = await scanSources(stored.state);
+  const result = reconcileAutomaticState(stored.state, snapshot, now);
+  encodeState(result.state);
+  await writeScanSummary(snapshot, result, dryRun);
 
-  await saveState(repository, githubToken, stored.issue, result.state);
+  if (dryRun) return;
 
-  if (result.firstRun && !stored.state?.initialized) {
+  if (!stored.state?.initialized) {
     await postDiscord(webhookUrl, {
       embeds: [
         {
           title: "兌換碼監控已建立",
-          description: `已建立 ${entries.length} 組兌換碼基準資料。之後只會通知新出現的有效碼。`,
+          description: `已建立 ${result.state.codes.length} 組兌換碼基準資料。之後只會通知新出現的兌換碼；巴哈玩家分享會標示尚未驗證。`,
           color: 0x228be6,
           url: ANNOUNCEMENT_SOURCE_URL,
           timestamp: new Date().toISOString(),
         },
       ],
     });
-  } else if (result.newActive.length > 0) {
-    await postCodeEmbeds(webhookUrl, "發現新兌換碼", result.newActive);
   }
-
-  if (result.firstRun && stored.state?.initialized) {
-    console.log("New source baselined without announcing existing codes.");
+  for (const announcement of result.announcements) {
+    await postCodeEmbeds(webhookUrl, "發現新兌換碼", announcement.entries, announcement);
   }
-
-  const active = entries.filter((entry) => entry.status === "active").length;
-  const expired = entries.filter((entry) => entry.status === "expired").length;
-  console.log(
-    `Source sync complete: ${active} active, ${expired} expired, ${result.newActive.length} new.`,
-  );
+  // Keep the previous cursor/seen history if Discord fails, so a later scan retries.
+  await saveState(repository, githubToken, stored.issue, result.state);
+  console.log("Source sync complete; state saved.");
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}
