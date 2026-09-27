@@ -2,13 +2,18 @@ name: Scan WWM redemption codes
 
 on:
   schedule:
-  - cron: "17,47 * * * *"  # 每 30 分鐘執行一次
+    - cron: "17,47 * * * *"  # 每 30 分鐘；GitHub 排程可能延後
   workflow_dispatch:
     inputs:
       manual_codes:
         description: "Optional: paste codes here to publish them manually"
         required: false
         type: string
+      dry_run:
+        description: "Preview sources only; do not post to Discord or update state"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -45,3 +50,6 @@ jobs:
           GH_STATE_TOKEN: ${{ github.token }}
           GH_REPOSITORY: ${{ github.repository }}
           MANUAL_CODES: ${{ github.event.inputs.manual_codes }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
+          BAHAMUT_SCAN_ENABLED: ${{ vars.BAHAMUT_SCAN_ENABLED || 'true' }}
+          BAHAMUT_MAX_PAGES: ${{ vars.BAHAMUT_MAX_PAGES || '8' }}
