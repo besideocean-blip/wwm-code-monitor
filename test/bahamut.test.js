@@ -42,6 +42,23 @@ test("fails closed for maintenance and missing post content", () => {
   assert.throws(() => parseBahamutPage('<a data-floor="364"></a><p>unexpected layout</p>'), /content was not found/);
 });
 
+test("extracts mixed alphanumeric and ten-letter codes from the same unlabelled reply", () => {
+  const expected = ["SK6HFW6T3T", "JN6NNWJN33", "EEQJMDMJHX"];
+  for (const separator of ["<br>", " ", "，", "/", "、"]) {
+    assert.deepEqual(extractReplyCodes(expected.join(separator)), expected);
+  }
+  assert.deepEqual(extractReplyCodes("sk6hfw6t3t<br>eeqjmdmjhx<br>SK6HFW6T3T"),
+    ["SK6HFW6T3T", "EEQJMDMJHX"]);
+  assert.deepEqual(extractReplyCodes("EEQJMDMJHX<br>YRYQHTNEDA"),
+    ["EEQJMDMJHX", "YRYQHTNEDA"]);
+  assert.deepEqual(extractReplyCodes("SK6HFW6T3T<br>THANKYOU"), ["SK6HFW6T3T"]);
+});
+
+test("a code-list heading also applies to codes on following lines", () => {
+  assert.deepEqual(extractReplyCodes("<p>兌換碼：</p><div>NEVERLOOKBACK</div><div>SK6HFW6T3T</div>"),
+    ["NEVERLOOKBACK", "SK6HFW6T3T"]);
+});
+
 test("first scan only reads the latest page for a quiet baseline", async () => {
   let requests = 0;
   const snapshot = await fetchBahamutReplies(null, {

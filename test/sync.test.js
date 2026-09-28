@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildCodeEmbeds, scanSources, main } from "../src/sync.js";
 import { YAR_URL } from "../src/monitor.js";
+import { parseBahamutPage } from "../src/bahamut.js";
+import { reconcileAutomaticState } from "../src/combined-state.js";
 
 test("keeps the existing title, green color and code lines; shows the Bahamut floor", () => {
   const entries = [{ code: "SK6HFW6T3T", status: "unverified" }];
@@ -28,6 +30,36 @@ test("one source failure keeps the other; both failures produce a visible error"
     fetchYar: async () => { throw new Error("offline"); },
     fetchBahamut: async () => { throw new Error("HTTP 403"); },
   }), /All configured sources failed/);
+});
+
+test("one reply produces one card with all unseen codes, omitting duplicates and expired codes", () => {
+  const html = `<section data-sn="10364"><a data-floor="364"></a><article><div class="c-article__content">
+    SK6HFW6T3T<br>JN6NNWJN33<br>EEQJMDMJHX<br>sk6hfw6t3t<br>HM0820
+  </div></article></section>`;
+  const page = parseBahamutPage(html);
+  const old = {
+    initialized: true, scannedSourceUrl: YAR_URL,
+    codes: [{ code: "JN6NNWJN33", status: "active" }],
+    expiredCodes: ["HM0820"],
+    bahamut: { initialized: true, lastFloor: 363 },
+  };
+  const result = reconcileAutomaticState(old, {
+    yarEntries: null, bahamut: { posts: page.posts, lastFloor: 364, pagesRead: 1 },
+  }, "2026-09-28T04:10:00Z");
+  assert.equal(result.announcements.length, 1);
+  const source = result.announcements[0];
+  const cards = buildCodeEmbeds("發現新兌換碼", source.entries, source);
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].embeds[0].description, "`SK6HFW6T3T`\n`EEQJMDMJHX`");
+  assert.equal(cards[0].embeds[0].footer.text, "巴哈姆特第 364 樓");
+});
+
+test("large multi-code replies are split into cards without losing codes", () => {
+  const entries = Array.from({ length: 400 }, (_, i) => ({ code: `TEST${String(i).padStart(6, "0")}` }));
+  const cards = buildCodeEmbeds("發現新兌換碼", entries, { source: "bahamut", floor: 364 });
+  assert.equal(cards.length, 2);
+  assert.equal(cards.reduce((sum, item) => sum + item.embeds[0].description.split("\n").length, 0), 400);
+  assert.ok(cards.every((item) => item.embeds[0].description.length <= 3900));
 });
 
 function installEnvironment(t, overrides) {

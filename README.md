@@ -114,9 +114,12 @@ Optional repository Actions variables:
 
 - Scans reply floors with text content, not the first-floor summary, small B1/B2
   comments, images, or later edits to already-processed floors.
+- Reads multiple codes from one reply, including line breaks, spaces, commas and
+  slashes. Groups unseen codes into one card and splits oversized cards as needed.
 - Removes quoted passages, links and crossed-out codes. It skips expired-code lines
-  and uses conservative token heuristics. Letter-only codes need an explicit code
-  label. These rules can miss codes; YAR remains the structured backup.
+  and uses conservative token heuristics. Ten-letter codes are also accepted in
+  multi-code lists; other letter-only codes need a code label or preceding list
+  heading. These rules can still miss codes; YAR remains the structured backup.
 - Uses the existing project's `data-floor` and `c-article__content` selectors.
   Synthetic fixture tests do not prove that the live site's layout is unchanged.
 - The live check on 2026-09-28 (Taiwan time) read YAR successfully but received

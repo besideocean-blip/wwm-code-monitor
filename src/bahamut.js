@@ -48,17 +48,46 @@ export function extractReplyCodes(content) {
   }
   const text = htmlToText(clean)
     .replace(/(?:https?:\/\/|www\.)\S+/gi, " ");
+  const tokensIn = (line) => [...line.matchAll(/(?<![A-Za-z0-9_-])([A-Za-z0-9][A-Za-z0-9_-]{5,31})(?![A-Za-z0-9_-])/g)];
+  const isExpiredLine = (line) => /失效|過期|过期|無效|无效|不能用|無法兌換|无法兑换|不能兌換|不能兑换|\bexpired\b|\binvalid\b|not\s+working/i.test(line);
+  const lines = text.split("\n").filter((line) => !isExpiredLine(line));
+  const codeLabel = /兌換碼|兑换码|序號|序号|禮包碼|礼包码|\bcodes?\b|\bcoupons?\b/i;
+  const isCodeListLine = (line) => {
+    const tokens = tokensIn(line);
+    if (!tokens.length) return false;
+    let remainder = line;
+    for (const token of [...tokens].reverse()) {
+      remainder = remainder.slice(0, token.index) + remainder.slice(token.index + token[0].length);
+    }
+    return !remainder.replace(/[\s`'"「」『』【】()（）:：,，。.!！;；、/|｜•·*\[\]-]/g, "");
+  };
+  // Multi-code lists can include ten-letter random codes with no digits.
+  // Requiring a list keeps standalone English chat out of this exception.
+  const listCodes = new Set(lines.filter(isCodeListLine).flatMap((line) =>
+    tokensIn(line).map((match) => normalizeCode(match[1])).filter((token) =>
+      looksLikeCode(token) && (/\d/.test(token) || /^[A-Z]{10}$/.test(token) || /^WWM/.test(token)),
+    ),
+  ));
   const codes = new Set();
-  for (const line of text.split("\n")) {
-    if (/失效|過期|过期|無效|无效|不能用|無法兌換|无法兑换|不能兌換|不能兑换|\bexpired\b|\binvalid\b|not\s+working/i.test(line)) continue;
-    const labelled = /兌換碼|兑换码|序號|序号|禮包碼|礼包码|\bcodes?\b|\bcoupons?\b/i.test(line);
-    for (const match of line.matchAll(/(?<![A-Za-z0-9_/-])([A-Za-z0-9][A-Za-z0-9_-]{5,31})(?![A-Za-z0-9_-])/g)) {
+  let followsCodeHeading = false;
+  for (const line of lines) {
+    const tokens = tokensIn(line);
+    const codeListLine = isCodeListLine(line);
+    const hasLabel = codeLabel.test(line);
+    const labelled = hasLabel || (followsCodeHeading && codeListLine);
+    if (hasLabel && !tokens.some((match) => looksLikeCode(match[1]))) {
+      followsCodeHeading = true;
+    } else if (!codeListLine && !hasLabel && line.trim()) {
+      followsCodeHeading = false;
+    }
+    for (const match of tokens) {
       const token = match[1];
-      if (!looksLikeCode(token)) continue;
+      const letterListCode = listCodes.size >= 2 && codeListLine &&
+        /^[A-Za-z]{10}$/.test(token) && looksLikeCode(normalizeCode(token));
+      if (!looksLikeCode(token) && !letterListCode) continue;
       const randomCode = /^[A-Za-z0-9]{10}$/.test(token) && /\d/.test(token);
       const standalone = line.replace(/[\s`'"「」『』【】()（）:：,，。.!！]/g, "") === token;
-      // Plain English chat is not a code. Letter-only codes require a label.
-      if (!(labelled || randomCode || (standalone && /\d/.test(token)) || /^WWM/i.test(token))) continue;
+      if (!(labelled || letterListCode || randomCode || (standalone && /\d/.test(token)) || /^WWM/i.test(token))) continue;
       codes.add(normalizeCode(token));
     }
   }
