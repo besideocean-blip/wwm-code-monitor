@@ -181,7 +181,7 @@ export function buildCodeEmbeds(title, entries, source = {}) {
         url: source.url ?? ANNOUNCEMENT_SOURCE_URL,
         timestamp: new Date().toISOString(),
         ...(source.source === "bahamut" ? {
-          footer: { text: `巴哈姆特第 ${source.floor} 樓｜玩家分享，尚未驗證` },
+          footer: { text: `巴哈姆特第 ${source.floor} 樓` },
         } : {}),
       },
     ],
@@ -298,7 +298,7 @@ export async function main() {
       embeds: [
         {
           title: "兌換碼監控已建立",
-          description: `已建立 ${result.state.codes.length} 組兌換碼基準資料。之後只會通知新出現的兌換碼；巴哈玩家分享會標示尚未驗證。`,
+          description: `已建立 ${result.state.codes.length} 組兌換碼基準資料。之後只會通知新出現的兌換碼。`,
           color: 0x228be6,
           url: ANNOUNCEMENT_SOURCE_URL,
           timestamp: new Date().toISOString(),

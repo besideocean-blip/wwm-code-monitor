@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { buildCodeEmbeds, scanSources, main } from "../src/sync.js";
 import { YAR_URL } from "../src/monitor.js";
 
-test("keeps the existing title, green color and code lines; labels only Bahamut candidates", () => {
+test("keeps the existing title, green color and code lines; shows the Bahamut floor", () => {
   const entries = [{ code: "SK6HFW6T3T", status: "unverified" }];
   const source = { source: "bahamut", floor: 364, url: "https://forum.gamer.com.tw/Co.php?bsn=75703&sn=10364" };
   const embed = buildCodeEmbeds("發現新兌換碼", entries, source)[0].embeds[0];
@@ -11,7 +11,7 @@ test("keeps the existing title, green color and code lines; labels only Bahamut 
   assert.equal(embed.description, "`SK6HFW6T3T`");
   assert.equal(embed.color, 0x2f9e44);
   assert.equal(embed.url, source.url);
-  assert.match(embed.footer.text, /第 364 樓.*尚未驗證/);
+  assert.equal(embed.footer.text, "巴哈姆特第 364 樓");
   assert.equal(buildCodeEmbeds("發現新兌換碼", entries)[0].embeds[0].footer, undefined);
 });
 
@@ -96,7 +96,7 @@ test("a normal automatic run posts a Bahamut card and only then saves its cursor
       calls.push("discord");
       const payload = JSON.parse(options.body);
       assert.deepEqual(payload.allowed_mentions, { parse: [] });
-      assert.match(payload.embeds[0].footer.text, /尚未驗證/);
+      assert.equal(payload.embeds[0].footer.text, "巴哈姆特第 364 樓");
       return new Response(null, { status: 204 });
     }
     if (host === "api.github.com" && options.method === "PATCH") {

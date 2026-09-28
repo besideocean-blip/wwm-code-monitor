@@ -11,7 +11,7 @@ PC Gamer and Arlen remain disabled.
 - Reads YAR's public active/expired lists and Bahamut's new reply floors every 30 minutes.
 - Compares codes with the state stored in a GitHub Issue.
 - Keeps the existing green Discord cards, titles, one-code-per-line layout and timestamps.
-- Adds a source link and an unverified-player-share footer to Bahamut cards.
+- Adds a source link and a reply-floor footer to Bahamut cards.
 - Deduplicates codes across YAR, Bahamut and manual reports, including previously expired codes.
 - Removes codes marked as confirmed expired by the site from the Issue state. A player's personal "used" marker does not mean a code is expired.
 - Establishes a baseline on the first scan after switching sources, so the site's existing codes are not all announced at once.
@@ -21,7 +21,7 @@ PC Gamer and Arlen remain disabled.
 - Offers a `dry_run` preview that reads sources without posting to Discord or writing the Issue.
 
 Both sources are community-maintained. A code listed as active has not necessarily
-been verified with your game account. Bahamut candidates are explicitly unverified;
+been verified with your game account. Bahamut candidates retain an internal `unverified` status;
 they cannot expire codes from other sources. A failed source keeps its existing
 state and does not stop the other source. If both sources fail, the run fails
 without changing the state. The Actions summary shows each source's result.
