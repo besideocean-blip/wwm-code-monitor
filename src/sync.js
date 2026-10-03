@@ -302,9 +302,7 @@ export async function main() {
   const repository = validateRepository(requireEnvironment("GH_REPOSITORY"));
   const githubToken = requireEnvironment("GH_STATE_TOKEN");
   const dryRun = process.env.DRY_RUN === "true";
-  const webhookUrls = dryRun ? null : validateWebhookUrls(
-    requireEnvironment("DISCORD_WEBHOOK_URL"),
-  );
+  const webhookUrls = dryRun ? null : parseWebhookUrls();
   const now = new Date().toISOString();
   const manualEntries = parseManualEntries(process.env.MANUAL_CODES);
 
@@ -344,7 +342,7 @@ export async function main() {
   if (dryRun) return;
 
   if (!stored.state?.initialized) {
-    await postDiscordALL(webhookUrls, {
+    await postDiscordAll(webhookUrls, {
       embeds: [
         {
           title: "兌換碼監控已建立",
