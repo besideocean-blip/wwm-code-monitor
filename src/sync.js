@@ -47,6 +47,26 @@ function validateWebhookUrl(value) {
   return url.toString();
 }
 
+function parseWebhookUrls() {
+  const raw =
+    process.env.DISCORD_WEBHOOK_URLS?.trim() ||
+    process.env.DISCORD_WEBHOOK_URL?.trim();
+
+  if (!raw) {
+    throw new Error(
+      "Missing environment variable: DISCORD_WEBHOOK_URLS or DISCORD_WEBHOOK_URL",
+    );
+  }
+
+  const urls = raw
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map(validateWebhookUrl);
+
+  return [...new Set(urls)];
+}
+
 function parseManualEntries(value) {
   const tokens = value?.match(/[A-Za-z0-9][A-Za-z0-9_-]{5,31}/g) ?? [];
   const entries = new Map();
@@ -150,6 +170,36 @@ async function postDiscord(webhookUrl, payload) {
   }
 }
 
+async function postDiscordAll(webhookUrls, payload) {
+  const results = await Promise.allSettled(
+    webhookUrls.map((webhookUrl) =>
+      postDiscord(webhookUrl, payload),
+    ),
+  );
+
+  let successCount = 0;
+  let failureCount = 0;
+
+  results.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      successCount += 1;
+    } else {
+      failureCount += 1;
+      console.warn(
+        `Discord webhook ${index + 1} failed: ${result.reason?.message ?? result.reason}`,
+      );
+    }
+  });
+
+  console.log(
+    `Discord broadcast complete: ${successCount} succeeded, ${failureCount} failed.`,
+  );
+
+  if (successCount === 0) {
+    throw new Error("All Discord webhooks failed.");
+  }
+}
+
 function chunkCodeLines(entries) {
   const chunks = [];
   let current = [];
@@ -188,9 +238,9 @@ export function buildCodeEmbeds(title, entries, source = {}) {
   }));
 }
 
-async function postCodeEmbeds(webhookUrl, title, entries, source) {
+async function postCodeEmbeds(webhookUrls, title, entries, source) {
   for (const payload of buildCodeEmbeds(title, entries, source)) {
-    await postDiscord(webhookUrl, payload);
+    await postDiscordAll(webhookUrls, payload);
   }
 }
 
@@ -252,7 +302,7 @@ export async function main() {
   const repository = validateRepository(requireEnvironment("GH_REPOSITORY"));
   const githubToken = requireEnvironment("GH_STATE_TOKEN");
   const dryRun = process.env.DRY_RUN === "true";
-  const webhookUrl = dryRun ? null : validateWebhookUrl(
+  const webhookUrls = dryRun ? null : validateWebhookUrls(
     requireEnvironment("DISCORD_WEBHOOK_URL"),
   );
   const now = new Date().toISOString();
@@ -268,7 +318,7 @@ export async function main() {
 
     encodeState(result.state); // Validate size before any external announcement.
     if (!dryRun && result.newActive.length > 0) {
-      await postCodeEmbeds(webhookUrl, "玩家回報新兌換碼", result.newActive);
+      await postCodeEmbeds(webhookUrls, "玩家回報新兌換碼", result.newActive);
     }
     if (!dryRun) await saveState(repository, githubToken, stored.issue, result.state);
 
@@ -294,7 +344,7 @@ export async function main() {
   if (dryRun) return;
 
   if (!stored.state?.initialized) {
-    await postDiscord(webhookUrl, {
+    await postDiscordALL(webhookUrls, {
       embeds: [
         {
           title: "兌換碼監控已建立",
@@ -307,7 +357,7 @@ export async function main() {
     });
   }
   for (const announcement of result.announcements) {
-    await postCodeEmbeds(webhookUrl, "發現新兌換碼", announcement.entries, announcement);
+    await postCodeEmbeds(webhookUrls, "發現新兌換碼", announcement.entries, announcement);
   }
   // Keep the previous cursor/seen history if Discord fails, so a later scan retries.
   await saveState(repository, githubToken, stored.issue, result.state);
