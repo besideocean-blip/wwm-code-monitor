@@ -195,9 +195,13 @@ async function postDiscordAll(webhookUrls, payload) {
     `Discord broadcast complete: ${successCount} succeeded, ${failureCount} failed.`,
   );
 
-  if (successCount === 0) {
-    throw new Error("All Discord webhooks failed.");
-  }
+if (successCount === 0) {
+  const firstFailure = results.find(
+    (result) => result.status === "rejected",
+  );
+
+  throw firstFailure?.reason ?? new Error("All Discord webhooks failed.");
+}
 }
 
 function chunkCodeLines(entries) {
