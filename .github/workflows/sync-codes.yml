@@ -46,6 +46,7 @@ jobs:
       - name: Scan and notify Discord
         run: node src/sync.js
         env:
+          DISCORD_WEBHOOK_URLS: ${{ secrets.DISCORD_WEBHOOK_URLS }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           GH_STATE_TOKEN: ${{ github.token }}
           GH_REPOSITORY: ${{ github.repository }}
