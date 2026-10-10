@@ -1,0 +1,55 @@
+name: Scan WWM official YouTube
+
+"on":
+  schedule:
+    # 每小時 23、53 分；與既有兌換碼 17、47 分錯開。cron 預設 UTC。
+    - cron: "23,53 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "scan＝正式掃描；dry-run＝只預覽；test＝推送最新影片測試卡片"
+        type: choice
+        required: true
+        default: scan
+        options:
+          - scan
+          - dry-run
+          - test
+
+permissions:
+  contents: read
+  issues: write
+
+# 所有執行共用一組鎖，避免同時讀寫同一份 YouTube 紀錄。
+concurrency:
+  group: wwm-official-youtube-monitor
+  cancel-in-progress: false
+
+jobs:
+  scan-youtube:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: discord-production
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Scan official YouTube
+        env:
+          PYTHONUNBUFFERED: "1"
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_STATE_TOKEN: ${{ github.token }}
+          # Facebook 與 YouTube 共用燕雲快報頻道的 Webhook。
+          OFFICIAL_DISCORD_WEBHOOK_URLS: ${{ secrets.OFFICIAL_DISCORD_WEBHOOK_URLS }}
+          # 以下 Variables 可留白，預設已填入官方頻道 ID。
+          YOUTUBE_CHANNEL_ID: ${{ vars.YOUTUBE_CHANNEL_ID }}
+          YOUTUBE_STATE_ISSUE_NUMBER: ${{ vars.YOUTUBE_STATE_ISSUE_NUMBER }}
+          YOUTUBE_MONITOR_MODE: ${{ inputs.mode || 'scan' }}
+        run: python scan_youtube.py
