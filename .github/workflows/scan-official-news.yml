@@ -1,0 +1,52 @@
+name: Scan WWM official news
+
+on:
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "scan：初始化／掃描；test：測試推播；preview：只讀取官網"
+        required: true
+        default: scan
+        type: choice
+        options:
+          - scan
+          - test
+          - preview
+
+permissions:
+  contents: read
+  issues: write
+
+# This group is independent of redemption-code and YouTube workflows.
+concurrency:
+  group: wwm-hmt-official-news-monitor-v1
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    # All scans share one state Issue; use the default branch only.
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    environment: discord-production
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Scan official news
+        env:
+          MODE: ${{ inputs.mode || 'scan' }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          OFFICIAL_DISCORD_WEBHOOK_URLS: ${{ secrets.OFFICIAL_DISCORD_WEBHOOK_URLS }}
+          PYTHONUNBUFFERED: "1"
+        run: python scan_official_news.py --mode "$MODE"
