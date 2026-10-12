@@ -83,10 +83,12 @@ def http_request(
     headers: dict[str, str] | None = None,
     payload: Any = None,
     safe_retry: bool = True,
+    retry_not_found: bool = False,
 ) -> bytes:
     """GET/PATCH 可重試；POST 僅在明確的 429 拒絕時重試。
 
     POST timeout / 5xx 結果可能不明，不在同一次呼叫盲目重送。
+    YouTube RSS 偶發 404：由來源呼叫明確啟用，僅限 GET，最多讀取三次。
     不輸出原始 urllib exception，因為它可能包含 Webhook URL。
     """
     body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -111,7 +113,12 @@ def http_request(
             return data
         except urllib.error.HTTPError as error:
             status = error.code
-            can_retry = safe_retry and status in (500, 502, 503, 504)
+            retry_404 = safe_retry and retry_not_found and method == "GET" and status == 404
+            can_retry = (safe_retry and status in (500, 502, 503, 504)) or retry_404
+            if retry_404:
+                delay = 10 * (2 ** attempt)
+                if attempt < 2:
+                    print(f"{label} RSS HTTP 404；{delay} 秒後再次讀取（第 {attempt + 2}/3 次）。")
             if status == 429:
                 can_retry = True  # 此次要求明確被限流，未執行。
                 raw = error.read(32_000)
@@ -127,6 +134,11 @@ def http_request(
                 if not math.isfinite(delay) or delay < 0 or delay > 30:
                     raise MonitorError(f"{label} HTTP 429；等待時間較長，保留進度供下次重試。") from None
             if not can_retry or attempt == 2:
+                if retry_404:
+                    raise MonitorError(
+                        f"{label} RSS HTTP 404（已嘗試 3 次）；本輪未讀到影片，"
+                        "保留原去重紀錄，下次排程再試。"
+                    ) from None
                 extra = "；確認 issues: write、Issues 功能與權杖權限" if label == "GitHub" and status in (403, 404, 410) else ""
                 raise MonitorError(f"{label} HTTP {status}{extra}。") from None
         except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException):
@@ -188,7 +200,10 @@ def parse_feed(data: bytes, channel_id: str) -> list[Video]:
 
 def fetch_videos(channel_id: str) -> list[Video]:
     url = "https://www.youtube.com/feeds/videos.xml?" + urllib.parse.urlencode({"channel_id": channel_id})
-    return parse_feed(http_request(url, label="YouTube", headers={"Accept": "application/atom+xml"}), channel_id)
+    return parse_feed(
+        http_request(url, label="YouTube", headers={"Accept": "application/atom+xml"}, retry_not_found=True),
+        channel_id,
+    )
 
 
 @dataclass(frozen=True)
