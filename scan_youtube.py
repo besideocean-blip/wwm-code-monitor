@@ -2,7 +2,8 @@
 """燕雲十六聲官方 YouTube → Discord；僅使用 Python 3.12+ 標準函式庫。
 
 去重紀錄存於獨立 GitHub Issue，不依賴 runner 本機、cache 或 Artifact。
-一般影片與 Shorts 一律按 YouTube Atom feed 的 video ID 處理。
+使用 YouTube Data API v3 讀取最近 50 部上傳影片；一般影片與 Shorts 都按 video ID 去重。
+需要 YOUTUBE_API_KEY；沿用原本的 Discord Webhook 與去重 Issue。
 """
 
 from __future__ import annotations
@@ -19,7 +20,6 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -35,16 +35,16 @@ MAX_RESPONSE_BYTES = 8_000_000
 CHANNEL_PATTERN = re.compile(r"UC[A-Za-z0-9_-]{22}\Z")
 VIDEO_PATTERN = re.compile(r"[A-Za-z0-9_-]{11}\Z")
 TARGET_PATTERN = re.compile(r"[0-9a-f]{24}\Z")
-NS = {
-    "atom": "http://www.w3.org/2005/Atom",
-    "yt": "http://www.youtube.com/xml/schemas/2015",
-    "media": "http://search.yahoo.com/mrss/",
-}
+PLAYLIST_PATTERN = re.compile(r"[A-Za-z0-9_-]{5,150}\Z")
 TAIWAN = timezone(timedelta(hours=8))
 
 
 class MonitorError(RuntimeError):
     """只包含可安全寫入 Actions log 的錯誤訊息。"""
+
+    def __init__(self, message: str, *, http_status: int | None = None):
+        super().__init__(message)
+        self.http_status = http_status
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -83,12 +83,10 @@ def http_request(
     headers: dict[str, str] | None = None,
     payload: Any = None,
     safe_retry: bool = True,
-    retry_not_found: bool = False,
 ) -> bytes:
     """GET/PATCH 可重試；POST 僅在明確的 429 拒絕時重試。
 
     POST timeout / 5xx 結果可能不明，不在同一次呼叫盲目重送。
-    YouTube RSS 偶發 404：由來源呼叫明確啟用，僅限 GET，最多讀取三次。
     不輸出原始 urllib exception，因為它可能包含 Webhook URL。
     """
     body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -113,12 +111,7 @@ def http_request(
             return data
         except urllib.error.HTTPError as error:
             status = error.code
-            retry_404 = safe_retry and retry_not_found and method == "GET" and status == 404
-            can_retry = (safe_retry and status in (500, 502, 503, 504)) or retry_404
-            if retry_404:
-                delay = 10 * (2 ** attempt)
-                if attempt < 2:
-                    print(f"{label} RSS HTTP 404；{delay} 秒後再次讀取（第 {attempt + 2}/3 次）。")
+            can_retry = safe_retry and status in (500, 502, 503, 504)
             if status == 429:
                 can_retry = True  # 此次要求明確被限流，未執行。
                 raw = error.read(32_000)
@@ -134,13 +127,8 @@ def http_request(
                 if not math.isfinite(delay) or delay < 0 or delay > 30:
                     raise MonitorError(f"{label} HTTP 429；等待時間較長，保留進度供下次重試。") from None
             if not can_retry or attempt == 2:
-                if retry_404:
-                    raise MonitorError(
-                        f"{label} RSS HTTP 404（已嘗試 3 次）；本輪未讀到影片，"
-                        "保留原去重紀錄，下次排程再試。"
-                    ) from None
                 extra = "；確認 issues: write、Issues 功能與權杖權限" if label == "GitHub" and status in (403, 404, 410) else ""
-                raise MonitorError(f"{label} HTTP {status}{extra}。") from None
+                raise MonitorError(f"{label} HTTP {status}{extra}。", http_status=status) from None
         except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException):
             if not safe_retry or attempt == 2:
                 raise MonitorError(f"{label} 連線失敗或逾時；保留進度供下次重試。") from None
@@ -165,45 +153,91 @@ class Video:
         }
 
 
-def parse_feed(data: bytes, channel_id: str) -> list[Video]:
-    if len(data) > 2_000_000 or b"<!DOCTYPE" in data.upper() or b"<!ENTITY" in data.upper():
-        raise MonitorError("YouTube RSS 大小或 XML 格式異常。")
+def youtube_api_request(resource: str, parameters: dict[str, Any], api_key: str) -> dict[str, Any]:
+    """只取官方公開資料；API Key 與原始回應不寫入 log 或狀態 Issue。"""
+    if resource not in ("channels", "playlistItems", "videos"):
+        raise MonitorError("不支援的 YouTube API 端點。")
+    url = "https://www.googleapis.com/youtube/v3/" + resource + "?" + urllib.parse.urlencode({**parameters, "key": api_key})
     try:
-        root = ET.fromstring(data)
-    except ET.ParseError:
-        raise MonitorError("YouTube 回應不是有效的 Atom RSS；不修改去重紀錄。") from None
-    if root.tag != f"{{{NS['atom']}}}feed":
-        raise MonitorError("YouTube 回應不是 Atom feed；不修改去重紀錄。")
-    # 實際 feed 根節點常省略 UC，entry 與 author URI 則保留完整 ID。
-    root_channel = (root.findtext("yt:channelId", namespaces=NS) or "").strip()
-    if root_channel not in (channel_id, channel_id[2:]):
-        raise MonitorError("RSS 頻道 ID 與設定不一致；已停止。")
-    author_uri = root.findtext("atom:author/atom:uri", namespaces=NS)
-    if author_uri and author_uri.rstrip("/") != f"https://www.youtube.com/channel/{channel_id}":
-        raise MonitorError("RSS 頻道作者網址與設定不一致；已停止。")
+        raw = http_request(url, label="YouTube API", headers={"Accept": "application/json"})
+    except MonitorError as error:
+        guidance = {
+            400: "請確認 YOUTUBE_API_KEY 複製完整、且 YOUTUBE_CHANNEL_ID 正確。",
+            401: "請確認 YOUTUBE_API_KEY 是否有效。",
+            403: "請確認 YouTube Data API v3 已啟用、API Key 限制允許此 API，且仍有可用配額。",
+            404: "請確認官方頻道 ID 與上傳清單仍有效。",
+        }.get(error.http_status, "")
+        raise MonitorError(str(error) + guidance, http_status=error.http_status) from None
+    try:
+        data = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        raise MonitorError("YouTube API 回應不是有效 JSON；不修改去重紀錄。") from None
+    if not isinstance(data, dict) or "error" in data or not isinstance(data.get("items"), list):
+        raise MonitorError("YouTube API 回應格式異常；不修改去重紀錄。")
+    return data
+
+
+def parse_api_videos(data: dict[str, Any], channel_id: str, requested_ids: set[str]) -> list[Video]:
+    """使用影片實際的發布時間，並檢查頻道與公開狀態。"""
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        raise MonitorError("YouTube API 影片清單格式異常。")
     videos: dict[str, Video] = {}
-    for entry in root.findall("atom:entry", NS):
-        video_id = (entry.findtext("yt:videoId", namespaces=NS) or "").strip()
-        entry_channel = entry.findtext("yt:channelId", namespaces=NS)
-        title = (entry.findtext("atom:title", namespaces=NS) or "").strip()
-        published = (entry.findtext("atom:published", namespaces=NS) or "").strip()
-        if not VIDEO_PATTERN.fullmatch(video_id) or entry_channel != channel_id or not title:
-            raise MonitorError("RSS 中有不完整或不同頻道的影片；不修改去重紀錄。")
-        published = parse_date(published).astimezone(timezone.utc).isoformat(timespec="seconds")
-        description = (entry.findtext("media:group/media:description", namespaces=NS) or "").strip()
-        videos[video_id] = Video(video_id, clip(title, 240), published, clip(description, 350))
+    for item in data["items"]:
+        if not isinstance(item, dict):
+            raise MonitorError("YouTube API 影片資料格式異常。")
+        video_id = item.get("id")
+        snippet = item.get("snippet")
+        status = item.get("status")
+        if (
+            not isinstance(video_id, str) or not VIDEO_PATTERN.fullmatch(video_id)
+            or video_id not in requested_ids or video_id in videos
+            or not isinstance(snippet, dict) or not isinstance(status, dict)
+            or snippet.get("channelId") != channel_id
+        ):
+            raise MonitorError("YouTube API 回傳不完整或不同頻道的影片；不修改去重紀錄。")
+        visibility = status.get("privacyStatus")
+        if visibility in ("private", "unlisted"):
+            continue
+        if visibility != "public":
+            raise MonitorError("YouTube API 缺少影片公開狀態；不修改去重紀錄。")
+        title = snippet.get("title")
+        description = snippet.get("description", "")
+        if not isinstance(title, str) or not title.strip() or not isinstance(description, str):
+            raise MonitorError("YouTube API 缺少影片標題或說明；不修改去重紀錄。")
+        published = parse_date(snippet.get("publishedAt")).astimezone(timezone.utc).isoformat(timespec="seconds")
+        videos[video_id] = Video(video_id, clip(title.strip(), 240), published, clip(description.strip(), 350))
     if not videos:
-        # 已知本頻道有影片；空回應不應建立錯誤基準。
-        raise MonitorError("YouTube RSS 沒有影片；保留原紀錄，不建立空基準。")
+        raise MonitorError("YouTube API 未取得公開影片；保留原紀錄，不建立空基準。")
     return sorted(videos.values(), key=lambda video: (parse_date(video.published), video.video_id))
 
 
 def fetch_videos(channel_id: str) -> list[Video]:
-    url = "https://www.youtube.com/feeds/videos.xml?" + urllib.parse.urlencode({"channel_id": channel_id})
-    return parse_feed(
-        http_request(url, label="YouTube", headers={"Accept": "application/atom+xml"}, retry_not_found=True),
-        channel_id,
-    )
+    api_key = os.getenv("YOUTUBE_API_KEY", "").strip()
+    if not api_key:
+        raise MonitorError("缺少 YOUTUBE_API_KEY；請在 discord-production 新增同名 Secret，並使用 API 版 scan-youtube.yml。")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{20,200}", api_key):
+        raise MonitorError("YOUTUBE_API_KEY 格式錯誤；請完整複製 Google 建立的 API Key。")
+    channels = youtube_api_request("channels", {"part": "contentDetails", "id": channel_id}, api_key)["items"]
+    if len(channels) != 1 or not isinstance(channels[0], dict) or channels[0].get("id") != channel_id:
+        raise MonitorError("YouTube API 找不到指定官方頻道；請確認 YOUTUBE_CHANNEL_ID。")
+    details = channels[0].get("contentDetails")
+    related = details.get("relatedPlaylists") if isinstance(details, dict) else None
+    playlist_id = related.get("uploads") if isinstance(related, dict) else None
+    if not isinstance(playlist_id, str) or not PLAYLIST_PATTERN.fullmatch(playlist_id):
+        raise MonitorError("YouTube API 未回傳有效的頻道上傳清單。")
+    playlist = youtube_api_request("playlistItems", {"part": "contentDetails", "playlistId": playlist_id, "maxResults": 50}, api_key)
+    video_ids: list[str] = []
+    for item in playlist["items"]:
+        details = item.get("contentDetails") if isinstance(item, dict) else None
+        video_id = details.get("videoId") if isinstance(details, dict) else None
+        if not isinstance(video_id, str) or not VIDEO_PATTERN.fullmatch(video_id):
+            raise MonitorError("YouTube API 上傳清單包含無效的影片 ID。")
+        if video_id not in video_ids:
+            video_ids.append(video_id)
+    if not video_ids or len(video_ids) > 50:
+        raise MonitorError("YouTube API 上傳清單沒有影片或超出預期大小；保留原去重紀錄。")
+    data = youtube_api_request("videos", {"part": "snippet,status", "id": ",".join(video_ids)}, api_key)
+    return parse_api_videos(data, channel_id, set(video_ids))
 
 
 @dataclass(frozen=True)
@@ -341,7 +375,7 @@ class GitHubState:
 def build_payload(video: Video, *, test: bool = False) -> dict[str, Any]:
     url = f"https://www.youtube.com/watch?v={video.video_id}"
     published = parse_date(video.published).astimezone(TAIWAN).strftime("%Y/%m/%d %H:%M")
-    description = ("🧪 **測試推播：以下為 RSS 最新影片，並非本次新發布；不修改去重紀錄。**\n\n" if test else "")
+    description = ("🧪 **測試推播：以下為 API 最新公開影片，並非本次新發布；不修改去重紀錄。**\n\n" if test else "")
     if video.description:
         description += clip(video.description, 350) + "\n\n"
     description += f"▶ [觀看完整影片]({url})"
@@ -391,7 +425,7 @@ def scan(
 ) -> None:
     state = storage.load()
     videos = fetch_videos(channel_id)
-    lines = [f"- RSS 讀取成功：{len(videos)} 部影片（不區分一般影片與 Shorts）。"]
+    lines = [f"- YouTube API 讀取成功：{len(videos)} 部公開影片（不區分一般影片與 Shorts）。"]
     if state is None:
         state = {
             "version": 1,
@@ -410,17 +444,24 @@ def scan(
         return
 
     seen = set(state["seen_video_ids"])
-    new_videos = [video for video in videos if video.video_id not in seen]
+    unseen_videos = [video for video in videos if video.video_id not in seen]
+    # API 最近 50 部可能比舊 RSS 的 15 部更早；首次監控前的歷史只補登記，不補發。
+    cutoff = parse_date(state["initialized_at"])
+    historical = [video for video in unseen_videos if parse_date(video.published) < cutoff]
+    new_videos = [video for video in unseen_videos if parse_date(video.published) >= cutoff]
+    state["seen_video_ids"].extend(video.video_id for video in historical)
     for video in new_videos:
         state["seen_video_ids"].append(video.video_id)
         state["pending"].append(video.record())
     encode_state(state)  # 容量檢查要在發送前。
     lines.append(f"- 新發現：{len(new_videos)} 部；待送／重試：{len(state['pending'])} 部。")
+    if historical:
+        lines.append(f"- 補登記監控啟動前的歷史影片：{len(historical)} 部，不補發舊片。")
     if dry_run:
         write_summary(lines + ["- dry-run：不發送 Discord、不保存狀態。"])
         return
-    if new_videos:
-        # 先保存待送快照；下一次即使影片離開 RSS 清單，仍可重試。
+    if new_videos or historical:
+        # 先保存歷史與待送快照；下一次即使影片離開最近清單，仍可重試。
         storage.save(state)
 
     active_keys = {destination.key for destination in destinations}
