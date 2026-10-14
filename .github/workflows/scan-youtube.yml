@@ -46,8 +46,9 @@ jobs:
           PYTHONUNBUFFERED: "1"
           GH_REPOSITORY: ${{ github.repository }}
           GH_STATE_TOKEN: ${{ github.token }}
-          # Facebook 與 YouTube 共用燕雲快報頻道的 Webhook。
+          # 僅使用燕雲快報的官方情報 Webhook。
           OFFICIAL_DISCORD_WEBHOOK_URLS: ${{ secrets.OFFICIAL_DISCORD_WEBHOOK_URLS }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           # 以下 Variables 可留白，預設已填入官方頻道 ID。
           YOUTUBE_CHANNEL_ID: ${{ vars.YOUTUBE_CHANNEL_ID }}
           YOUTUBE_STATE_ISSUE_NUMBER: ${{ vars.YOUTUBE_STATE_ISSUE_NUMBER }}
