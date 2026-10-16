@@ -13,6 +13,7 @@ const STATE_START = "<!-- wwm-code-state:start -->";
 const STATE_END = "<!-- wwm-code-state:end -->";
 const MAX_STATE_BYTES = 60_000;
 const MAX_EMBED_DESCRIPTION = 3900;
+const MAX_MESSAGE_CONTENT = 2000;
 const ANNOUNCEMENT_SOURCE_URL = YAR_URL;
 
 function requireEnvironment(name) {
@@ -195,30 +196,29 @@ async function postDiscordAll(webhookUrls, payload) {
     `Discord broadcast complete: ${successCount} succeeded, ${failureCount} failed.`,
   );
 
-if (successCount === 0) {
-  const firstFailure = results.find(
-    (result) => result.status === "rejected",
-  );
-
-  throw firstFailure?.reason ?? new Error("All Discord webhooks failed.");
-}
+  if (successCount === 0) {
+    throw new Error("All Discord webhooks failed.");
+  }
 }
 
-function chunkCodeLines(entries) {
+function chunkCodeLines(entries, maxLength) {
   const chunks = [];
   let current = [];
   let currentLength = 0;
 
   for (const entry of entries) {
     const line = `\`${entry.code}\``;
-    const nextLength = currentLength + line.length + 1;
-    if (current.length > 0 && nextLength > MAX_EMBED_DESCRIPTION) {
+    if (line.length > maxLength) {
+      throw new Error("Discord message has no room for a complete code");
+    }
+    const nextLength = currentLength + (current.length > 0 ? 1 : 0) + line.length;
+    if (current.length > 0 && nextLength > maxLength) {
       chunks.push(current);
       current = [];
       currentLength = 0;
     }
+    currentLength += (current.length > 0 ? 1 : 0) + line.length;
     current.push(line);
-    currentLength += line.length + 1;
   }
 
   if (current.length > 0) chunks.push(current);
@@ -226,13 +226,26 @@ function chunkCodeLines(entries) {
 }
 
 export function buildCodeEmbeds(title, entries, source = {}) {
-  return chunkCodeLines(entries).map((lines) => ({
+  const sourceUrl = source.url ?? ANNOUNCEMENT_SOURCE_URL;
+  const sourceLabel = source.source === "bahamut"
+    ? `巴哈姆特第 ${source.floor} 樓`
+    : "YAR 兌換碼清單";
+  const prefix = `**${title}**\n\n`;
+  // Angle brackets keep the source link from adding another preview card.
+  const suffix = `\n\n${sourceLabel}\n<${sourceUrl}>`;
+  // The same complete codes must fit both the plain text and the existing card.
+  const maxCodeLength = Math.min(
+    MAX_EMBED_DESCRIPTION,
+    MAX_MESSAGE_CONTENT - prefix.length - suffix.length,
+  );
+  return chunkCodeLines(entries, maxCodeLength).map((lines) => ({
+    content: `${prefix}${lines.join("\n")}${suffix}`,
     embeds: [
       {
         title,
         description: lines.join("\n"),
         color: 0x2f9e44,
-        url: source.url ?? ANNOUNCEMENT_SOURCE_URL,
+        url: sourceUrl,
         timestamp: new Date().toISOString(),
         ...(source.source === "bahamut" ? {
           footer: { text: `巴哈姆特第 ${source.floor} 樓` },
@@ -346,11 +359,14 @@ export async function main() {
   if (dryRun) return;
 
   if (!stored.state?.initialized) {
+    const title = "兌換碼監控已建立";
+    const description = `已建立 ${result.state.codes.length} 組兌換碼基準資料。之後只會通知新出現的兌換碼。`;
     await postDiscordAll(webhookUrls, {
+      content: `**${title}**\n${description}\n<${ANNOUNCEMENT_SOURCE_URL}>`,
       embeds: [
         {
-          title: "兌換碼監控已建立",
-          description: `已建立 ${result.state.codes.length} 組兌換碼基準資料。之後只會通知新出現的兌換碼。`,
+          title,
+          description,
           color: 0x228be6,
           url: ANNOUNCEMENT_SOURCE_URL,
           timestamp: new Date().toISOString(),
