@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { extractReplyCodes, parseBahamutPage, fetchBahamutReplies } from "../src/bahamut.js";
 import { fetchYarEntries, SOURCE_URL } from "../src/monitor.js";
+import { reconcileAutomaticState } from "../src/combined-state.js";
 
 // Synthetic fixtures based on the existing project's Bahamut content/floor selectors.
 // A successful live read is still required to validate the site's current markup.
@@ -40,6 +41,86 @@ test("ignores nested quotes, deleted codes, links, expired lines and ordinary En
 test("fails closed for maintenance and missing post content", () => {
   assert.throws(() => parseBahamutPage("<title>系統維修中</title>"), /floors were not found/);
   assert.throws(() => parseBahamutPage('<a data-floor="364"></a><p>unexpected layout</p>'), /content was not found/);
+});
+
+test("deleted floor 354 with an author account or moderator notice does not block floors 388 and 389", () => {
+  for (const notice of [
+    '此文章已由原作者(<a href="/user">TestPlayer</a>)刪除',
+    "此文章已由原作者（TestPlayer）刪除",
+    "【刪除】管理員：文章內容重複（不倒扣刪文）",
+    "本文已被刪除",
+  ]) {
+    const deleted = `<section class="c-section" id="disable_10354">
+      <a class="floor" data-floor="354">354 樓</a><div>${notice}</div></section>`;
+    const parsed = parseBahamutPage(deleted + page([[388, "QEQWC6RAP8"], [389, "sdk8xhrwh4"]], 20));
+    assert.deepEqual(parsed.posts.map(({ floor, codes }) => ({ floor, codes })), [
+      { floor: 354, codes: [] },
+      { floor: 388, codes: ["QEQWC6RAP8"] },
+      { floor: 389, codes: ["SDK8XHRWH4"] },
+    ]);
+  }
+});
+
+test("a folded placeholder uses its hidden real body and is announced only once", () => {
+  const placeholder = `<section class="c-section" id="disable_10354">
+    <a class="floor" data-floor="354">354 樓</a><div>此文章已摺疊</div></section>`;
+  const body = `<section class="c-section" id="post_10354" style="display:none">
+    <a class="floor" data-floor="354">354 樓</a>
+    <article><div class="c-article__content">QEQWC6RAP8</div></article></section>`;
+  const parsed = parseBahamutPage(placeholder + body + page([[355, "sdk8xhrwh4"]], 18));
+  assert.deepEqual(parsed.posts.map((post) => post.floor), [354, 355]);
+  assert.deepEqual(parsed.posts[0].codes, ["QEQWC6RAP8"]);
+  assert.equal(parsed.posts[0].url, "https://forum.gamer.com.tw/Co.php?bsn=75703&sn=10354");
+  assert.throws(() => parseBahamutPage(placeholder + page([[355, "sdk8xhrwh4"]], 18)),
+    /floor 354 content was not found/);
+});
+
+test("repeated floor attributes and controls do not cut the article into incomplete fragments", () => {
+  const html = `<a data-floor="999" class="jump">Jump</a>
+    <section class="c-section" id="post_10354" data-floor="354">
+      <a class="floor" data-floor="354">354 樓</a>
+      <button data-floor="354">回覆</button>
+      <article><div class="c-article__content">QEQWC6RAP8
+        <blockquote><a data-floor="1">1 樓</a>QUOTED2026</blockquote>
+      </div></article>
+      <div class="c-reply"><a data-floor="354">小留言</a>COMMENT777</div>
+    </section>` + page([[355, "sdk8xhrwh4"]], 18);
+  const parsed = parseBahamutPage(html);
+  assert.deepEqual(parsed.posts.map(({ floor, codes }) => ({ floor, codes })), [
+    { floor: 354, codes: ["QEQWC6RAP8"] }, { floor: 355, codes: ["SDK8XHRWH4"] },
+  ]);
+});
+
+test("the content class can be on an article element, with nested content preserved", () => {
+  const html = `<section class="c-section" id="post_10388"><a class="floor" data-floor="388">388 樓</a>
+    <article class="c-article__content"><div>QEQWC6RAP8</div><div>sdk8xhrwh4</div></article></section>`;
+  assert.deepEqual(parseBahamutPage(html).posts[0].codes, ["QEQWC6RAP8", "SDK8XHRWH4"]);
+});
+
+test("already processed floor 354 need not have a body, but an unread new floor must still fail safely", async () => {
+  const old = { initialized: true, lastFloor: 387 };
+  const malformed = (floor) => `<section class="c-section" id="post_${10000 + floor}">
+    <a class="floor" data-floor="${floor}">${floor} 樓</a><div>Unexpected layout</div></section>`;
+  const snapshot = await fetchBahamutReplies(old, {
+    fetchImpl: async () => new Response(malformed(354) + page([[388, "QEQWC6RAP8"], [389, "sdk8xhrwh4"]], 20)),
+  });
+  const result = reconcileAutomaticState({ initialized: true, codes: [], bahamut: old },
+    { yarEntries: null, bahamut: snapshot }, "2026-10-16T13:30:00Z");
+  assert.deepEqual(result.announcements.flatMap((item) => item.entries.map((entry) => entry.code)),
+    ["QEQWC6RAP8", "SDK8XHRWH4"]);
+  assert.equal(result.state.bahamut.lastFloor, 389);
+  const second = reconcileAutomaticState(result.state, { yarEntries: null, bahamut: snapshot }, "2026-10-16T14:00:00Z");
+  assert.deepEqual(second.announcements, []);
+  await assert.rejects(fetchBahamutReplies(old, {
+    fetchImpl: async () => new Response(malformed(388) + page([[389, "sdk8xhrwh4"]], 20)),
+  }), /floor 388 content was not found.*cursor unchanged/);
+  assert.equal(old.lastFloor, 387);
+});
+
+test("conflicting reply identities cannot be merged under the same floor", () => {
+  const html = page([[354, "QEQWC6RAP8"]], 18)
+    + page([[354, "sdk8xhrwh4"]], 18).replace('data-sn="10354"', 'data-sn="99999"');
+  assert.throws(() => parseBahamutPage(html), /conflicting post IDs/);
 });
 
 test("extracts mixed alphanumeric and ten-letter codes from the same unlabelled reply", () => {
