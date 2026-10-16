@@ -104,11 +104,68 @@ function threadUrl(value, base) {
   } catch { return null; }
 }
 
-export function parseBahamutPage(html, sourceUrl = BAHAMUT_LATEST_URL) {
+function floorMarkers(html) {
+  return [...html.matchAll(/<[a-z][^>]*\bdata-floor\s*=\s*["'](\d+)["'][^>]*>/gi)];
+}
+
+function hasClass(tag, name) {
+  return (attribute(tag, "class") ?? "").split(/\s+/).includes(name);
+}
+
+function contentOpening(html) {
+  return html.match(/<([a-z][\w:-]*)\b(?=[^>]*\bclass=["'][^"']*\bc-article__content\b[^"']*["'])[^>]*>/i);
+}
+
+function isDeletedPost(html) {
+  const text = htmlToText(html).replace(/\s+/g, "");
+  // The site's deletion notice can include the author's linked account name.
+  // A disabled/collapsed wrapper alone is NOT proof that a post was deleted.
+  return /(?:此)?文章已由(?:原作者|作者|板主|版主|管理員|站方)(?:[（(][^()（）]{0,100}[)）])?刪除|(?:此文章|本篇文章|本文|文章)已(?:被|遭)?刪除|[【〖]刪除[】〗]/.test(text);
+}
+
+function replyBlocks(html) {
+  const blocks = [];
+  const sections = /<section\b[^>]*>/gi;
+  for (let match; (match = sections.exec(html));) {
+    const opening = match[0];
+    const id = attribute(opening, "id") ?? "";
+    const postId = id.match(/^(?:post|disable)_(\d+)$/)?.[1]
+      ?? attribute(opening, "data-sn");
+    if (!postId && !hasClass(opening, "c-section")) continue;
+    const range = elementRange(html, match.index, "section");
+    const block = html.slice(match.index, range.end);
+    // Only inspect the header for a floor number; quotes and comments can also
+    // contain data-floor attributes, but they are not independent reply floors.
+    const bodyStart = block.search(/<article\b|<[a-z][^>]*\bclass=["'][^"']*\b(?:c-post__body|c-article__content|c-reply)\b/i);
+    const header = bodyStart < 0 ? block : block.slice(0, bodyStart);
+    const markers = floorMarkers(header);
+    const labelled = markers.filter((marker) => hasClass(marker[0], "floor"));
+    const floors = [...new Set((labelled.length ? labelled : markers).map((marker) => Number(marker[1])))];
+    if (!floors.length) {
+      if (postId) throw new Error(`Bahamut post ${postId} floor was not found; cursor unchanged`);
+      continue;
+    }
+    if (floors.length !== 1) throw new Error("Bahamut reply header has conflicting floors; cursor unchanged");
+    blocks.push({ floor: floors[0], postId, html: block });
+    sections.lastIndex = range.end;
+  }
+  if (blocks.length) return blocks;
+
+  // Compatibility with minimal pages that omit section wrappers. Consecutive
+  // markers for the same floor belong to one block, not several partial posts.
+  const markers = floorMarkers(html).filter((marker, index, all) =>
+    index === 0 || marker[1] !== all[index - 1][1]);
+  return markers.map((marker, index) => ({
+    floor: Number(marker[1]), postId: undefined,
+    html: html.slice(marker.index, markers[index + 1]?.index ?? html.length),
+  }));
+}
+
+export function parseBahamutPage(html, sourceUrl = BAHAMUT_LATEST_URL, { afterFloor = 0 } = {}) {
   const clean = html.replace(/<!--[\s\S]*?-->/g, " ")
     .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, " ");
-  const markers = [...clean.matchAll(/<[a-z][^>]*\bdata-floor\s*=\s*["'](\d+)["'][^>]*>/gi)];
-  if (!markers.length) throw new Error("Bahamut reply floors were not found (blocked page or changed markup)");
+  const blocks = replyBlocks(clean);
+  if (!blocks.length) throw new Error("Bahamut reply floors were not found (blocked page or changed markup)");
 
   const pages = [];
   let currentPage;
@@ -125,27 +182,42 @@ export function parseBahamutPage(html, sourceUrl = BAHAMUT_LATEST_URL) {
   const pageNumber = currentPage ?? (requestedPage || Math.max(1, ...pages));
   const pageUrl = `${SOURCE_URL}&page=${pageNumber}`;
   const posts = [];
-  for (let index = 0; index < markers.length; index += 1) {
-    const marker = markers[index];
-    const floor = Number(marker[1]);
+  const groups = new Map();
+  for (const block of blocks) {
+    const group = groups.get(block.floor) ?? [];
+    group.push(block);
+    groups.set(block.floor, group);
+  }
+  for (const [floor, variants] of groups) {
     if (!Number.isSafeInteger(floor) || floor < 1) throw new Error("Bahamut reply floor is invalid");
-    const block = clean.slice(marker.index, markers[index + 1]?.index ?? clean.length);
-    const content = block.match(/<div\b(?=[^>]*\bclass=["'][^"']*\bc-article__content\b[^"']*["'])[^>]*>/i);
-    if (!content) {
-      if (/本文已被刪除|文章已被刪除|此文章已由原作者刪除/.test(block)) {
-        posts.push({ floor, url: pageUrl, codes: [] });
-        continue;
-      }
-      throw new Error(`Bahamut floor ${floor} content was not found`);
-    }
-    const range = elementRange(block, content.index, "div");
-    const sectionStart = clean.lastIndexOf("<section", marker.index);
-    const section = sectionStart >= 0 ? clean.slice(sectionStart, marker.index) : "";
-    const opening = section.match(/^<section\b[^>]*>/i)?.[0] ?? "";
-    const postId = attribute(opening, "data-sn") ?? attribute(opening, "id")?.match(/^post_(\d+)$/)?.[1];
+    const postIds = [...new Set(variants.map((block) => block.postId).filter(Boolean))];
+    if (postIds.length > 1) throw new Error(`Bahamut floor ${floor} has conflicting post IDs; cursor unchanged`);
+    const postId = postIds[0];
     const url = /^\d+$/.test(postId ?? "")
       ? `https://${HOST}/Co.php?bsn=75703&sn=${postId}` : pageUrl;
-    posts.push({ floor, url, codes: floor === 1 ? [] : extractReplyCodes(block.slice(range.contentStart, range.contentEnd)) });
+    // These floors have already been processed (or are the excluded first-floor
+    // summary). Their body layout must not block later, unseen replies.
+    if (floor === 1 || floor <= afterFloor) {
+      posts.push({ floor, url, codes: [] });
+      continue;
+    }
+    // Folded posts can appear twice: a disable_ placeholder, then a post_ body
+    // with display:none. Read the real body; do not treat the placeholder as a post.
+    const bodies = variants.map((block) => ({ block, content: contentOpening(block.html) }))
+      .filter((item) => item.content);
+    if (!bodies.length) {
+      if (!variants.some((block) => isDeletedPost(block.html))) {
+        throw new Error(`Bahamut floor ${floor} content was not found (page ${pageNumber}, post ${postId ?? "unknown"}); cursor unchanged`);
+      }
+      posts.push({ floor, url, codes: [] });
+      continue;
+    }
+    const codes = new Set();
+    for (const { block, content } of bodies) {
+      const range = elementRange(block.html, content.index, content[1]);
+      for (const code of extractReplyCodes(block.html.slice(range.contentStart, range.contentEnd))) codes.add(code);
+    }
+    posts.push({ floor, url, codes: [...codes] });
   }
   // An unexpected ordering must not move the saved cursor past missing replies.
   if (posts.some((post, i) => i > 0 && post.floor <= posts[i - 1].floor)) {
@@ -168,7 +240,7 @@ export async function fetchBahamutReplies(previous, { fetchImpl = fetch, maxPage
     const html = await fetchSourceText({
       name: "Bahamut", url, host: HOST, language: "zh-TW,zh;q=0.9",
     }, fetchImpl);
-    const page = parseBahamutPage(html, url);
+    const page = parseBahamutPage(html, url, { afterFloor: cursor ?? 0 });
     for (const post of page.posts) posts.set(post.floor, post);
     const oldest = page.posts[0].floor;
     if (cursor === null || oldest <= cursor) {
