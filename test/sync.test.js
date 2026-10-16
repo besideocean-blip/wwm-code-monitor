@@ -1,24 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildCodeEmbeds, scanSources, main } from "../src/sync.js";
+import { buildCodeMessages, scanSources, main } from "../src/sync.js";
 import { YAR_URL } from "../src/monitor.js";
 import { parseBahamutPage } from "../src/bahamut.js";
 import { reconcileAutomaticState } from "../src/combined-state.js";
 
-test("codes and their source remain readable with embeds hidden; keeps the existing card", () => {
+test("codes appear once in normal text with a masked source link and no embed", () => {
   const entries = [{ code: "SK6HFW6T3T", status: "unverified" }];
   const source = { source: "bahamut", floor: 364, url: "https://forum.gamer.com.tw/Co.php?bsn=75703&sn=10364" };
-  const payload = buildCodeEmbeds("發現新兌換碼", entries, source)[0];
-  const embed = payload.embeds[0];
+  const payload = buildCodeMessages("發現新兌換碼", entries, source)[0];
   assert.equal(payload.content,
-    `**發現新兌換碼**\n\n\`SK6HFW6T3T\`\n\n巴哈姆特第 364 樓\n<${source.url}>`);
+    `**發現新兌換碼**\n\n\`SK6HFW6T3T\`\n\n[巴哈姆特第 364 樓](${source.url})`);
   assert.doesNotMatch(payload.content, /玩家分享|尚未驗證/);
-  assert.equal(embed.title, "發現新兌換碼");
-  assert.equal(embed.description, "`SK6HFW6T3T`");
-  assert.equal(embed.color, 0x2f9e44);
-  assert.equal(embed.url, source.url);
-  assert.equal(embed.footer.text, "巴哈姆特第 364 樓");
-  assert.equal(buildCodeEmbeds("發現新兌換碼", entries)[0].embeds[0].footer, undefined);
+  assert.equal(payload.embeds, undefined);
+  const yar = buildCodeMessages("發現新兌換碼", entries)[0];
+  assert.ok(yar.content.endsWith(`[YAR 兌換碼清單](${YAR_URL})`));
+  assert.equal(yar.embeds, undefined);
 });
 
 test("one source failure keeps the other; both failures produce a visible error", async () => {
@@ -36,7 +33,7 @@ test("one source failure keeps the other; both failures produce a visible error"
   }), /All configured sources failed/);
 });
 
-test("one reply produces one card with all unseen codes, omitting duplicates and expired codes", () => {
+test("one reply produces one text message with all unseen codes, omitting duplicates and expired codes", () => {
   const html = `<section data-sn="10364"><a data-floor="364"></a><article><div class="c-article__content">
     SK6HFW6T3T<br>JN6NNWJN33<br>EEQJMDMJHX<br>sk6hfw6t3t<br>HM0820
   </div></article></section>`;
@@ -52,28 +49,27 @@ test("one reply produces one card with all unseen codes, omitting duplicates and
   }, "2026-09-28T04:10:00Z");
   assert.equal(result.announcements.length, 1);
   const source = result.announcements[0];
-  const cards = buildCodeEmbeds("發現新兌換碼", source.entries, source);
-  assert.equal(cards.length, 1);
-  assert.equal(cards[0].embeds[0].description, "`SK6HFW6T3T`\n`EEQJMDMJHX`");
-  assert.deepEqual([...cards[0].content.matchAll(/`([^`]+)`/g)].map((match) => match[1]),
+  const messages = buildCodeMessages("發現新兌換碼", source.entries, source);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].embeds, undefined);
+  assert.deepEqual([...messages[0].content.matchAll(/`([^`]+)`/g)].map((match) => match[1]),
     ["SK6HFW6T3T", "EEQJMDMJHX"]);
-  assert.equal(cards[0].embeds[0].footer.text, "巴哈姆特第 364 樓");
+  assert.ok(messages[0].content.endsWith(`[巴哈姆特第 364 樓](${source.url})`));
 });
 
 test("long multi-code replies respect the 2000-character content limit without losing or truncating codes", () => {
   const entries = Array.from({ length: 400 }, (_, i) => ({ code: `TEST${String(i).padStart(28, "0")}` }));
   const source = { source: "bahamut", floor: 364,
     url: "https://forum.gamer.com.tw/Co.php?bsn=75703&sn=10364" };
-  const cards = buildCodeEmbeds("🎁 發現新兌換碼", entries, source);
-  assert.ok(cards.length > 1);
+  const messages = buildCodeMessages("🎁 發現新兌換碼", entries, source);
+  assert.ok(messages.length > 1);
   const visibleCodes = [];
-  for (const card of cards) {
-    assert.ok(card.content.length <= 2000);
-    assert.ok(card.embeds[0].description.length <= 3900);
-    assert.ok(card.content.endsWith(`<${source.url}>`));
-    const codes = [...card.content.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+  for (const message of messages) {
+    assert.ok(message.content.length <= 2000);
+    assert.equal(message.embeds, undefined);
+    assert.ok(message.content.endsWith(`[巴哈姆特第 364 樓](${source.url})`));
+    const codes = [...message.content.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
     visibleCodes.push(...codes);
-    assert.equal(card.embeds[0].description, codes.map((code) => `\`${code}\``).join("\n"));
   }
   assert.deepEqual(visibleCodes, entries.map((entry) => entry.code));
 });
@@ -131,7 +127,7 @@ test("Discord failure leaves state and cursor untouched so the notification can 
   assert.deepEqual(mutations, []);
 });
 
-test("a normal automatic run posts a Bahamut card and only then saves its cursor", async (t) => {
+test("a normal automatic run posts Bahamut text with previews suppressed before saving its cursor", async (t) => {
   installEnvironment(t, {});
   const calls = [];
   t.mock.method(globalThis, "fetch", async (url, options = {}) => {
@@ -145,9 +141,10 @@ test("a normal automatic run posts a Bahamut card and only then saves its cursor
       calls.push("discord");
       const payload = JSON.parse(options.body);
       assert.deepEqual(payload.allowed_mentions, { parse: [] });
-      assert.equal(payload.embeds[0].footer.text, "巴哈姆特第 364 樓");
+      assert.equal(payload.embeds, undefined);
+      assert.equal(payload.flags, 4);
       assert.match(payload.content, /`SK6HFW6T3T`/);
-      assert.match(payload.content, /巴哈姆特第 364 樓/);
+      assert.ok(payload.content.endsWith("[巴哈姆特第 364 樓](https://forum.gamer.com.tw/Co.php?bsn=75703&sn=10364)"));
       return new Response(null, { status: 204 });
     }
     if (host === "api.github.com" && options.method === "PATCH") {
@@ -183,11 +180,12 @@ test("YAR automatic announcements carry the code in normal message content", asy
   assert.equal(messages.length, 1);
   assert.match(messages[0].content, /`SK6HFW6T3T`/);
   assert.doesNotMatch(messages[0].content, /KNOWN2026/);
-  assert.ok(messages[0].content.endsWith(`<${YAR_URL}>`));
-  assert.equal(messages[0].embeds[0].description, "`SK6HFW6T3T`");
+  assert.ok(messages[0].content.endsWith(`[YAR 兌換碼清單](${YAR_URL})`));
+  assert.equal(messages[0].embeds, undefined);
+  assert.equal(messages[0].flags, 4);
 });
 
-test("manual reports send the same complete text and card to every configured webhook", async (t) => {
+test("manual reports send identical text and masked links without embeds to every configured webhook", async (t) => {
   const urls = [
     "https://discord.com/api/webhooks/123/test_only_webhook_value_0000",
     "https://discord.com/api/webhooks/456/test_only_webhook_value_0001",
@@ -217,13 +215,16 @@ test("manual reports send the same complete text and card to every configured we
   for (const { payload } of deliveries) {
     assert.deepEqual(payload, deliveries[0].payload);
     assert.deepEqual(payload.allowed_mentions, { parse: [] });
+    assert.equal(payload.embeds, undefined);
+    assert.equal(payload.flags, 4);
+    assert.ok(payload.content.endsWith(`[YAR 兌換碼清單](${YAR_URL})`));
     assert.match(payload.content, /玩家回報新兌換碼/);
     assert.deepEqual([...payload.content.matchAll(/`([^`]+)`/g)].map((match) => match[1]),
       ["sk6hfw6t3t", "EEQJMDMJHX"]);
   }
 });
 
-test("initialization remains visible without embeds and does not announce existing codes", async (t) => {
+test("initialization sends only text and a masked link without announcing existing codes", async (t) => {
   installEnvironment(t, { BAHAMUT_SCAN_ENABLED: "false" });
   const messages = [];
   t.mock.method(globalThis, "fetch", async (url, options = {}) => {
@@ -242,5 +243,7 @@ test("initialization remains visible without embeds and does not announce existi
   assert.match(messages[0].content, /兌換碼監控已建立/);
   assert.match(messages[0].content, /已建立 1 組兌換碼基準資料/);
   assert.doesNotMatch(messages[0].content, /KNOWN2026/);
-  assert.equal(messages[0].embeds[0].color, 0x228be6);
+  assert.ok(messages[0].content.endsWith(`[YAR 兌換碼清單](${YAR_URL})`));
+  assert.equal(messages[0].embeds, undefined);
+  assert.equal(messages[0].flags, 4);
 });
