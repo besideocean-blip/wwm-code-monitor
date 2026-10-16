@@ -12,8 +12,8 @@ const STATE_TITLE = "[WWM Monitor] State - do not edit";
 const STATE_START = "<!-- wwm-code-state:start -->";
 const STATE_END = "<!-- wwm-code-state:end -->";
 const MAX_STATE_BYTES = 60_000;
-const MAX_EMBED_DESCRIPTION = 3900;
 const MAX_MESSAGE_CONTENT = 2000;
+const SUPPRESS_EMBEDS = 1 << 2;
 const ANNOUNCEMENT_SOURCE_URL = YAR_URL;
 
 function requireEnvironment(name) {
@@ -162,6 +162,7 @@ async function postDiscord(webhookUrl, payload) {
     body: JSON.stringify({
       username: "燕雲十六聲兌換碼",
       allowed_mentions: { parse: [] },
+      flags: SUPPRESS_EMBEDS,
       ...payload,
     }),
     signal: AbortSignal.timeout(15_000),
@@ -225,38 +226,21 @@ function chunkCodeLines(entries, maxLength) {
   return chunks;
 }
 
-export function buildCodeEmbeds(title, entries, source = {}) {
+export function buildCodeMessages(title, entries, source = {}) {
   const sourceUrl = source.url ?? ANNOUNCEMENT_SOURCE_URL;
   const sourceLabel = source.source === "bahamut"
     ? `巴哈姆特第 ${source.floor} 樓`
     : "YAR 兌換碼清單";
   const prefix = `**${title}**\n\n`;
-  // Angle brackets keep the source link from adding another preview card.
-  const suffix = `\n\n${sourceLabel}\n<${sourceUrl}>`;
-  // The same complete codes must fit both the plain text and the existing card.
-  const maxCodeLength = Math.min(
-    MAX_EMBED_DESCRIPTION,
-    MAX_MESSAGE_CONTENT - prefix.length - suffix.length,
-  );
+  const suffix = `\n\n[${sourceLabel}](${sourceUrl})`;
+  const maxCodeLength = MAX_MESSAGE_CONTENT - prefix.length - suffix.length;
   return chunkCodeLines(entries, maxCodeLength).map((lines) => ({
     content: `${prefix}${lines.join("\n")}${suffix}`,
-    embeds: [
-      {
-        title,
-        description: lines.join("\n"),
-        color: 0x2f9e44,
-        url: sourceUrl,
-        timestamp: new Date().toISOString(),
-        ...(source.source === "bahamut" ? {
-          footer: { text: `巴哈姆特第 ${source.floor} 樓` },
-        } : {}),
-      },
-    ],
   }));
 }
 
-async function postCodeEmbeds(webhookUrls, title, entries, source) {
-  for (const payload of buildCodeEmbeds(title, entries, source)) {
+async function postCodeMessages(webhookUrls, title, entries, source) {
+  for (const payload of buildCodeMessages(title, entries, source)) {
     await postDiscordAll(webhookUrls, payload);
   }
 }
@@ -333,7 +317,7 @@ export async function main() {
 
     encodeState(result.state); // Validate size before any external announcement.
     if (!dryRun && result.newActive.length > 0) {
-      await postCodeEmbeds(webhookUrls, "玩家回報新兌換碼", result.newActive);
+      await postCodeMessages(webhookUrls, "玩家回報新兌換碼", result.newActive);
     }
     if (!dryRun) await saveState(repository, githubToken, stored.issue, result.state);
 
@@ -362,20 +346,11 @@ export async function main() {
     const title = "兌換碼監控已建立";
     const description = `已建立 ${result.state.codes.length} 組兌換碼基準資料。之後只會通知新出現的兌換碼。`;
     await postDiscordAll(webhookUrls, {
-      content: `**${title}**\n${description}\n<${ANNOUNCEMENT_SOURCE_URL}>`,
-      embeds: [
-        {
-          title,
-          description,
-          color: 0x228be6,
-          url: ANNOUNCEMENT_SOURCE_URL,
-          timestamp: new Date().toISOString(),
-        },
-      ],
+      content: `**${title}**\n${description}\n[YAR 兌換碼清單](${ANNOUNCEMENT_SOURCE_URL})`,
     });
   }
   for (const announcement of result.announcements) {
-    await postCodeEmbeds(webhookUrls, "發現新兌換碼", announcement.entries, announcement);
+    await postCodeMessages(webhookUrls, "發現新兌換碼", announcement.entries, announcement);
   }
   // Keep the previous cursor/seen history if Discord fails, so a later scan retries.
   await saveState(repository, githubToken, stored.issue, result.state);
