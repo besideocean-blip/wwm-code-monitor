@@ -160,7 +160,6 @@ async function postDiscord(webhookUrl, payload) {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      username: "燕雲十六聲兌換碼",
       allowed_mentions: { parse: [] },
       flags: SUPPRESS_EMBEDS,
       ...payload,
