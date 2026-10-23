@@ -355,6 +355,38 @@ def decode_state(body: str) -> dict[str, Any]:
     return state
 
 
+def merge_states(states: list[dict[str, Any]]) -> dict[str, Any]:
+    """Keep all known articles and recipient receipts from valid duplicates.
+
+    A seen key includes the first-run baseline as well as delivered articles.
+    It therefore wins over an older pending copy. Keep the oldest Issue's
+    initialization date, and never mutate any input or discard unreadable data.
+    """
+    if not states:
+        raise MonitorError("沒有可合併的官網去重紀錄，已停止。")
+    for state in states:
+        validate_state(state)
+    seen = {key for state in states for key in state["seen"]}
+    pending: dict[str, Any] = {}
+    for state in states:
+        for key, entry in state["pending"].items():
+            if key in seen:
+                continue
+            if key not in pending:
+                pending[key] = {"article": dict(entry["article"]),
+                                "delivered_to": sorted(set(entry["delivered_to"]))}
+            else:
+                if pending[key]["article"]["url"] != entry["article"]["url"]:
+                    raise MonitorError("官網待發紀錄的網址識別衝突，已停止並保留原紀錄。")
+                pending[key]["delivered_to"] = sorted(
+                    set(pending[key]["delivered_to"]) | set(entry["delivered_to"]))
+    merged = {"schema": 1, "source": SOURCE_URL,
+              "initialized_at": states[0]["initialized_at"],
+              "seen": sorted(seen), "pending": pending}
+    encode_state(merged)  # Check format and capacity before any Issue is changed.
+    return merged
+
+
 class GitHubIssueStore:
     def __init__(self, http: HTTPClient, token: str, repository: str):
         if not token or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
@@ -367,7 +399,8 @@ class GitHubIssueStore:
         self.number: int | None = None
 
     def load(self) -> dict[str, Any] | None:
-        matches = []
+        self.number = None
+        matches: dict[int, dict[str, Any]] = {}
         for page in range(1, 51):
             query = urllib.parse.urlencode({"state": "all", "sort": "created",
                                             "direction": "asc", "per_page": 100, "page": page})
@@ -378,20 +411,38 @@ class GitHubIssueStore:
                 if not isinstance(issue, dict) or "pull_request" in issue:
                     continue
                 body = issue.get("body") or ""
-                if issue.get("title") == STATE_TITLE or body.startswith(STATE_MARKER):
-                    matches.append(issue)
+                if (issue.get("title") == STATE_TITLE or
+                        isinstance(body, str) and body.startswith(STATE_MARKER)):
+                    number = issue.get("number")
+                    if type(number) is not int or number <= 0:
+                        raise MonitorError("GitHub 去重 Issue 編號異常，已停止。")
+                    matches[number] = issue
             if len(issues) < 100:
                 break
         else:
             raise MonitorError("專案 Issue 數量超出查找上限，已停止，未建立新紀錄。")
-        if len(matches) > 1:
-            raise MonitorError("找到多個官網去重 Issue；請先確認要保留哪一份紀錄。")
         if not matches:
             return None
-        self.number = matches[0].get("number")
-        if not isinstance(self.number, int) or self.number <= 0:
-            raise MonitorError("GitHub 去重 Issue 編號異常，已停止。")
-        return decode_state(matches[0].get("body") or "")
+        states = []
+        # The oldest number is stable even if another Issue is closed or updated.
+        for number in sorted(matches):
+            body = matches[number].get("body") or ""
+            try:
+                if not isinstance(body, str):
+                    raise MonitorError("Issue 內文格式異常。")
+                states.append(decode_state(body))
+            except MonitorError as exc:
+                raise MonitorError(f"官網去重 Issue #{number} 無法讀取：{exc}") from None
+        state = merge_states(states) if len(states) > 1 else states[0]
+        self.number = min(matches)
+        if state != states[0]:
+            # Persist the full union before the source scan or any Discord send.
+            # Other Issues remain intact; subsequent runs converge on this one.
+            self.save(state)
+        if len(states) > 1:
+            print(f"已整合 {len(states)} 份官網去重紀錄，沿用 Issue #{self.number}；"
+                  f"已記錄 {len(state['seen'])} 篇，待發 {len(state['pending'])} 篇。")
+        return state
 
     def save(self, state: dict[str, Any]) -> None:
         body = encode_state(state)
