@@ -129,20 +129,30 @@ function decodeState(body) {
 }
 
 async function loadStateIssue(repository, token) {
-  const issue = await githubRequest(
+  const issues = await githubRequest(
     repository,
     token,
-    "/issues/8",
+    "/issues?state=open&per_page=100",
   );
 
-  if (
-    issue.pull_request ||
-    issue.state !== "open" ||
-    issue.title !== STATE_TITLE
-  ) {
-    throw new Error(
-      "State Issue #8 is missing, closed, or has an unexpected title",
-    );
+  const matches = issues
+    .filter(
+      (item) =>
+        !item.pull_request &&
+        item.title?.trim() === STATE_TITLE,
+    )
+    .sort((a, b) => (b.number ?? 0) - (a.number ?? 0));
+
+  console.log(
+    `Found ${matches.length} state issue(s): ${
+      matches.map((item) => `#${item.number}`).join(", ") || "none"
+    }`,
+  );
+
+  const issue = matches[0];
+
+  if (!issue) {
+    return { issue: null, state: null };
   }
 
   return {
