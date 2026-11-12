@@ -2,7 +2,7 @@ name: Scan WWM redemption codes
 
 on:
   schedule:
-    - cron: "17,47 * * * *"  # 每 30 分鐘；GitHub 排程可能延後
+    - cron: "16,46 * * * *"  # 每 30 分鐘；GitHub 排程可能延後
   workflow_dispatch:
     inputs:
       manual_codes:
