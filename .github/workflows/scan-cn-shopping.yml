@@ -13,6 +13,10 @@ on:
         type: choice
         default: scan
         options: [scan, preview]
+      recover_message_url:
+        description: '只有傳送後回執失敗時使用：貼上已存在的 Discord 訊息連結以復原，不會重送'
+        type: string
+        required: false
 permissions:
   contents: read
   id-token: write
@@ -35,6 +39,7 @@ jobs:
       - name: Collect CN shopping and deliver approved notices
         env:
           MODE: ${{ inputs.mode || 'scan' }}
-          OFFICIAL_DISCORD_WEBHOOK_URLS: ${{ secrets.OFFICIAL_DISCORD_WEBHOOK_URLS }}
+          CN_SHOPPING_DISCORD_WEBHOOK_URLS: ${{ secrets.CN_SHOPPING_DISCORD_WEBHOOK_URLS }}
+          RECOVER_MESSAGE_URL: ${{ inputs.recover_message_url }}
           PYTHONUNBUFFERED: '1'
         run: python scan_cn_shopping.py --mode "$MODE"

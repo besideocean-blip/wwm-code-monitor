@@ -2,7 +2,7 @@
 """Collect official CN shopping articles and deliver approved catalog notices.
 
 Python standard library only. GitHub OIDC authenticates to the catalog; the
-existing official Discord secret stays in GitHub, never in the website bundle.
+forum-only Discord secret stays in GitHub, never in the website bundle.
 """
 from __future__ import annotations
 
@@ -17,13 +17,19 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
+from datetime import datetime, timezone, timedelta
 
 SOURCE='https://www.yysls.cn/news/'
 SITE='https://ruanni-yanwu-teahouse.besideocean.chatgpt.site'
-KEYWORDS=re.compile(r'外[观觀]|套[装裝]|[时時][装裝]|武器|[发髮]型|[战戰]令|返[场場]|[礼禮]包|商城|[惠折]音券|和[鸣鳴]|特效')
+KEYWORDS=re.compile(r'外[观觀]|套[装裝]|[时時][装裝]|武器|[发髮]型|[战戰]令|返[场場]|[礼禮]包|商城|[惠折]音券|和[鸣鳴]|特效|武[学學]|奇[术術]')
 VOID={'br','img','input','meta','link','hr','source','area','base','embed','param','track','wbr'}
 
 class MonitorError(Exception): pass
+
+class HttpError(MonitorError):
+    def __init__(self,status):
+        self.status=status
+        super().__init__(f'來源／同步服務回應 HTTP {status}；未清空整理紀錄。')
 
 def source_url(value):
     u=urllib.parse.urlsplit(urllib.parse.urljoin(SOURCE,value))
@@ -94,7 +100,7 @@ def request(url,method='GET',body=None,headers=None):
         except urllib.error.HTTPError as e:
             code=e.code;e.close()
             if method=='GET' and code in {429,500,502,503,504} and n+1<attempts:time.sleep(n+1);continue
-            raise MonitorError(f'來源／同步服務回應 HTTP {code}；未清空整理紀錄。') from None
+            raise HttpError(code) from None
         except (urllib.error.URLError,TimeoutError,OSError):
             if n+1<attempts:time.sleep(n+1);continue
             raise MonitorError('來源／同步服務連線失敗；請稍後重試。') from None
@@ -140,33 +146,110 @@ def webhooks(value):
         if not line:continue
         u=urllib.parse.urlsplit(line)
         if u.scheme!='https' or u.netloc not in {'discord.com','discordapp.com','ptb.discord.com','canary.discord.com'} or not re.fullmatch(r'/api(?:/v\d+)?/webhooks/\d+/[A-Za-z0-9._-]+',u.path) or u.fragment:
-            raise MonitorError('OFFICIAL_DISCORD_WEBHOOK_URLS 格式錯誤。')
+            raise MonitorError('CN_SHOPPING_DISCORD_WEBHOOK_URLS 格式錯誤。')
         q=urllib.parse.parse_qs(u.query)
-        if set(q)-{'wait','thread_id'}:raise MonitorError('Webhook 含未支援的參數。')
-        q['wait']=['true'];normal=urllib.parse.urlunsplit((u.scheme,u.netloc,u.path,urllib.parse.urlencode(sorted(q.items()),doseq=True),''))
+        if set(q)-{'wait'}:raise MonitorError('請使用論壇頻道的 Webhook 原始網址，不要指定單一貼文。')
+        normal=urllib.parse.urlunsplit((u.scheme,u.netloc,u.path,'',''))
         if normal not in urls:urls.append(normal)
-    if not urls:raise MonitorError('請沿用 discord-production 的 OFFICIAL_DISCORD_WEBHOOK_URLS。')
+    if len(urls)>10:raise MonitorError('論壇推播最多設定 10 個頻道。')
     return urls
 
-def deliver(token):
-    headers={'Authorization':'Bearer '+token};hooks=webhooks(os.environ.get('OFFICIAL_DISCORD_WEBHOOK_URLS',''))
-    targets=[hashlib.sha256(u.encode()).hexdigest()[:32] for u in hooks]
-    data=json_request(SITE+'/api/products/notifications',headers=headers);sent=0
+def snowflake(value):return isinstance(value,str) and re.fullmatch(r'[0-9]{17,20}',value) is not None
+
+def forum_targets(hooks):
+    targets=[]
+    for hook in hooks:
+        info=json_request(hook)
+        if info.get('type')!=1 or not all(snowflake(info.get(k)) for k in ['id','guild_id','channel_id']) or info['id']!=hook.split('/')[-2]:
+            raise MonitorError('請使用伺服器內論壇頻道的傳入 Webhook。')
+        destination=hashlib.sha256(('discord-forum:'+info['guild_id']+':'+info['channel_id']).encode()).hexdigest()[:32]
+        if any(t['destination']==destination for t in targets):continue
+        targets.append({'hook':hook,'destination':destination,'guildId':info['guild_id'],'channelId':info['channel_id'],'webhookId':info['id']})
+    return targets
+
+def period(value):
+    if not value:return '未確認'
+    try:
+        if 'T' not in value:return value
+        return datetime.fromisoformat(value.replace('Z','+00:00')).astimezone(timezone(timedelta(hours=8))).strftime('%Y/%m/%d %H:%M')+'（台灣時間）'
+    except (ValueError,TypeError):return '未確認'
+
+def forum_payload(notice,is_update=False):
+    p=notice.get('product') or {};name=p.get('name') or notice['name'];image=p.get('image') or notice['image']
+    if image.startswith('/'):image=SITE+image
+    status={'unknown':'待查證','announced':'官方已預告','released':'曾於國際服上架'}.get(p.get('internationalStatus') or notice.get('internationalStatus'),'待查證')
+    fields=[{'name':'分類','value':p.get('category') or '其他','inline':True},{'name':'國際服狀態','value':status,'inline':True}]
+    if p.get('originalName') and p['originalName']!=name:fields.append({'name':'官方原名','value':p['originalName'][:100]})
+    if p.get('internationalNote'):fields.append({'name':'國際服查證說明','value':p['internationalNote'][:450]})
+    if p.get('internationalEvidenceUrl'):fields.append({'name':'國際服依據','value':'[官方公告]('+p['internationalEvidenceUrl']+')'})
+    if p.get('videoUrl'):fields.append({'name':'效果展示','value':'[觀看影片]('+p['videoUrl']+')'})
+    fields.append({'name':'商品圖鑑','value':'[圖片與更多販售紀錄]('+SITE+notice['url']+')'})
+    main={'title':name[:100],'url':p.get('sourceUrl') or notice['sourceUrl'],'description':(p.get('description') or notice.get('description') or '商品資料')[:600],'image':{'url':image},'color':0x55734C,'fields':fields,'footer':{'text':'商品編號：'+notice['productId']+'｜推播：'+notice['id']}}
+    if notice.get('publishedAt'):main['timestamp']=notice['publishedAt']
+    embeds=[main]
+    for server,label in [('mainland','陸服'),('international','國際服')]:
+        offers=sorted([o for o in p.get('offers',[]) if o['server']==server],key=lambda o:o.get('sourceDate') or o.get('startsAt') or '',reverse=True)
+        if not offers:continue
+        o=offers[0];price='固定價格未確認' if o.get('price') is None else f"{o['price']:,} {o['currency']}"
+        values=[{'name':'價格','value':price[:80],'inline':True},{'name':'取得方式','value':o['method'],'inline':True},{'name':'期間','value':period(o.get('startsAt'))+' ～ '+period(o.get('endsAt'))},{'name':'用券條件','value':(o.get('coupons') or '尚未確認')[:350]}]
+        if o.get('note'):values.append({'name':'說明','value':o['note'][:350]})
+        embeds.append({'title':label+'｜販售紀錄','url':o['sourceUrl'],'color':0x55734C if server=='mainland' else 0xA6744F,'fields':values,'footer':{'text':'來源日期：'+(o.get('sourceDate') or '未確認')}})
+    return {'username':'燕雲快報｜商品前瞻','content':('📝 **商品資料更新**' if is_update else '🛍️ **商品前瞻與購買資料**')+'\n陸服與國際服分別記錄；歷次整理保留在本篇。','allowed_mentions':{'parse':[]},'embeds':embeds}
+
+def deliver(token,recover_url=''):
+    hooks=webhooks(os.environ.get('CN_SHOPPING_DISCORD_WEBHOOK_URLS',''))
+    if not hooks:
+        if recover_url:raise MonitorError('請先設定商品論壇專用的 CN_SHOPPING_DISCORD_WEBHOOK_URLS。')
+        print('::notice::已同步待整理公告；尚未設定商品論壇 Webhook，未發送任何 Discord 訊息。')
+        return 0
+    destinations=forum_targets(hooks);targets=[t['destination'] for t in destinations]
+    headers={'Authorization':'Bearer '+token}
+    data=json_request(SITE+'/api/products/notifications',headers=headers)
+    def receipt(notice,t,action,**extra):
+        return json_request(SITE+'/api/products/notifications',method='POST',body={'id':notice['id'],'receipt':t['destination'],'targets':targets,'action':action,**extra},headers=headers)
+    if recover_url:
+        match=re.fullmatch(r'https://(?:ptb\.|canary\.)?discord\.com/channels/([0-9]{17,20})/([0-9]{17,20})/([0-9]{17,20})',recover_url.strip())
+        if not match:raise MonitorError('復原請填完整的 Discord 訊息連結。')
+        guild,thread,message=match.groups()
+        for t in destinations:
+            if t['guildId']!=guild:continue
+            try:result=json_request(t['hook']+'/messages/'+message+'?thread_id='+thread)
+            except HttpError as e:
+                if e.status in {403,404}:continue
+                raise
+            if result.get('webhook_id')!=t['webhookId'] or result.get('channel_id')!=thread:continue
+            footers=[e.get('footer',{}).get('text') for e in result.get('embeds',[])]
+            for n in data['notices']:
+                if '商品編號：'+n['productId']+'｜推播：'+n['id'] not in footers:continue
+                receipt(n,t,'complete',guildId=guild,threadId=thread,messageId=message)
+                print('已復原論壇回執，沒有重送訊息。');return 0
+        raise MonitorError('找不到與待確認傳送相符的論壇訊息；沒有修改紀錄或重送。')
+    sent=0
     for notice in data['notices']:
-        for hook,target in zip(hooks,targets):
-            if target in notice.get('deliveredTo',[]):continue
-            product_url=SITE+notice['url']
-            image=notice['image'];image=SITE+image if image.startswith('/') else image
-            payload={'username':'燕雲快報｜陸服商品前瞻','content':'🛍️ **陸服商品圖鑑有新整理**\n國際服價格與檔期請以當地公告為準。','allowed_mentions':{'parse':[]},'embeds':[{'title':notice['name'][:200],'url':product_url,'description':notice['description'][:400],'image':{'url':image},'color':0x55734C,'fields':[{'name':'查看與比較','value':f'[開啟商品圖鑑]({product_url})\n[陸服官方原文]({notice["sourceUrl"]})'}]}]}
-            result=json_request(hook,method='POST',body=payload)
-            if not result.get('id'):raise MonitorError('Discord 未確認訊息結果，請檢查頻道後再重跑。')
-            json_request(SITE+'/api/products/notifications',method='POST',body={'id':notice['id'],'receipt':target,'targets':targets},headers=headers)
+        for t in destinations:
+            if t['destination'] in notice.get('deliveredTo',[]):continue
+            begun=receipt(notice,t,'begin')
+            if begun.get('alreadyDelivered'):continue
+            thread=begun.get('threadId') or ''
+            payload=forum_payload(notice,bool(thread));query={'wait':'true'}
+            if thread:query['thread_id']=thread
+            else:payload['thread_name']=('【'+(notice.get('product') or {}).get('category','商品')+'】'+notice['name'])[:100]
+            try:result=json_request(t['hook']+'?'+urllib.parse.urlencode(query),method='POST',body=payload)
+            except HttpError as e:
+                if e.status in {400,401,403,404,405,413,415,429}:receipt(notice,t,'cancel')
+                raise
+            if not snowflake(result.get('id')) or not snowflake(result.get('channel_id')) or result['channel_id']==t['channelId'] or (thread and result['channel_id']!=thread):
+                raise MonitorError('Discord 傳送結果尚未確認；已暫停該商品重送，請核對論壇後使用復原操作。')
+            receipt(notice,t,'complete',guildId=t['guildId'],threadId=result['channel_id'],messageId=result['id'])
             sent+=1
     return sent
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--mode',choices=['scan','preview'],default='scan');args=parser.parse_args()
     try:
+        recover_url=os.environ.get('RECOVER_MESSAGE_URL','').strip()
+        if recover_url and args.mode=='scan':
+            deliver(oidc_token(),recover_url);return 0
         articles=collect()
         if args.mode=='preview':
             print(json.dumps({'count':len(articles),'articles':[{'title':a['title'],'url':a['url'],'publishedAt':a['publishedAt']} for a in articles]},ensure_ascii=False,indent=2));return 0
