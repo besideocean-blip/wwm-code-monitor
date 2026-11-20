@@ -27,9 +27,32 @@ VOID={'br','img','input','meta','link','hr','source','area','base','embed','para
 class MonitorError(Exception): pass
 
 class HttpError(MonitorError):
-    def __init__(self,status):
+    def __init__(self,status,service='來源／同步服務',detail=''):
         self.status=status
-        super().__init__(f'來源／同步服務回應 HTTP {status}；未清空整理紀錄。')
+        super().__init__(f'{service}回應 HTTP {status}'+('（'+detail+'）' if detail else '')+'；未清空整理紀錄。')
+
+def response_error(url,raw):
+    """Expose only service labels and API codes, never response text or tokens."""
+    u=urllib.parse.urlsplit(url)
+    discord=u.hostname in {'discord.com','discordapp.com','ptb.discord.com','canary.discord.com'}
+    service='Discord 論壇' if discord else '網站公告同步' if url.startswith(SITE+'/api/products/ingest') else '網站推播回執' if url.startswith(SITE+'/api/products/notifications') else '陸服官網' if u.hostname=='www.yysls.cn' else '來源／同步服務'
+    if not discord:return service,''
+    try:data=json.loads(raw)
+    except (ValueError,UnicodeError):return service,''
+    if not isinstance(data,dict):return service,''
+    details=['代碼 '+str(data['code'])] if isinstance(data.get('code'),int) else []
+    keys={'embeds','fields','name','value','inline','title','description','footer','text','timestamp','image','url','thread_id','thread_name','applied_tags','content','username','avatar_url','allowed_mentions','flags'}
+    def visit(value,path=(),depth=0):
+        if not isinstance(value,dict) or depth>8 or len(details)>=9:return
+        errors=value.get('_errors',[])
+        if isinstance(errors,list):
+            for item in errors[:3]:
+                code=item.get('code') if isinstance(item,dict) else None
+                if isinstance(code,str) and re.fullmatch('[A-Z0-9_]{1,80}',code):details.append(('.'.join(path) or 'payload')+':'+code)
+        for key,child in value.items():
+            if isinstance(key,str) and (key in keys or re.fullmatch('[0-9]{1,2}',key)):visit(child,(*path,key),depth+1)
+    visit(data.get('errors'))
+    return service,'；'.join(details[:9])
 
 def source_url(value):
     u=urllib.parse.urlsplit(urllib.parse.urljoin(SOURCE,value))
@@ -99,9 +122,13 @@ def request(url,method='GET',body=None,headers=None):
             if len(raw)>8*1024*1024:raise MonitorError('來源回應超出大小限制。')
             return raw
         except urllib.error.HTTPError as e:
-            code=e.code;e.close()
+            code=e.code
+            try:error_body=e.read(32768)
+            except (OSError,ValueError):error_body=b''
+            finally:e.close()
             if method=='GET' and code in {429,500,502,503,504} and n+1<attempts:time.sleep(n+1);continue
-            raise HttpError(code) from None
+            service,detail=response_error(url,error_body)
+            raise HttpError(code,service,detail) from None
         except (urllib.error.URLError,TimeoutError,OSError):
             if n+1<attempts:time.sleep(n+1);continue
             raise MonitorError('來源／同步服務連線失敗；請稍後重試。') from None
