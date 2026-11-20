@@ -168,44 +168,55 @@ def forum_targets(hooks):
         targets.append({'hook':hook,'destination':destination,'guildId':info['guild_id'],'channelId':info['channel_id'],'webhookId':info['id']})
     return targets
 
-def period(value):
+def period(value,precise=False):
     if not value:return '未確認'
     try:
         if 'T' not in value:return value
-        return datetime.fromisoformat(value.replace('Z','+00:00')).astimezone(timezone(timedelta(hours=8))).strftime('%Y/%m/%d %H:%M')+'（台灣時間）'
+        return datetime.fromisoformat(value.replace('Z','+00:00')).astimezone(timezone(timedelta(hours=8))).strftime('%Y/%m/%d %H:%M:%S' if precise else '%Y/%m/%d %H:%M')+'（台灣時間）'
     except (ValueError,TypeError):return '未確認'
 
 def latest_offer(product,server):
     offers=[o for o in product.get('offers',[]) if o['server']==server]
     return max(offers,key=lambda o:o.get('sourceDate') or o.get('startsAt') or '',default=None)
 
-def price_text(offer):
+def regular_price_text(offer):
     if not offer:return '尚未查證'
     if offer.get('price') is None:return '固定價格未確認'
     return f"{offer['price']:,} {offer['currency']}"
 
-def forum_payload(notice,is_update=False):
+def price_text(offer):
+    if not offer or offer.get('salePrice') is None:return regular_price_text(offer)
+    original='原價未確認' if offer.get('price') is None else '原價：'+regular_price_text(offer)
+    return original+'\n上架優惠：'+f"{offer['salePrice']:,} {offer['currency']}"
+
+def forum_payload(notice,is_update=False,legacy=False):
     p=notice.get('product') or {};name=p.get('name') or notice['name'];image=p.get('image') or notice['image']
     if image.startswith('/'):image=SITE+image
     status={'unknown':'待查證','unreleased':'尚未上架','announced':'官方已預告','released':'曾於國際服上架'}.get(p.get('internationalStatus') or notice.get('internationalStatus'),'待查證')
-    fields=[{'name':'陸服價格','value':price_text(latest_offer(p,'mainland'))[:80],'inline':True}]
+    pricing=regular_price_text if legacy else price_text
+    fields=[{'name':'陸服價格','value':pricing(latest_offer(p,'mainland'))[:180],'inline':True}]
     international=latest_offer(p,'international')
-    if international:fields.append({'name':'國際服價格','value':price_text(international)[:80],'inline':True})
-    fields.extend([{'name':'分類','value':p.get('category') or '其他','inline':True},{'name':'國際服狀態','value':status,'inline':True}])
+    if international:fields.append({'name':'國際服價格','value':pricing(international)[:180],'inline':True})
+    if legacy:fields.append({'name':'分類','value':p.get('category') or '其他','inline':True})
+    fields.append({'name':'國際服狀態','value':status,'inline':True})
     if p.get('internationalEvidenceUrl'):fields.append({'name':'國際服依據','value':'[官方公告]('+p['internationalEvidenceUrl']+')'})
     if p.get('videoUrl'):fields.append({'name':'效果展示','value':'[觀看影片]('+p['videoUrl']+')'})
     fields.append({'name':'商品圖鑑','value':'[圖片與更多販售紀錄]('+SITE+notice['url']+')'})
-    main={'title':name[:100],'url':p.get('sourceUrl') or notice['sourceUrl'],'description':(p.get('description') or notice.get('description') or '商品資料')[:600],'image':{'url':image},'color':0x55734C,'fields':fields}
+    main={'title':name[:100],'url':p.get('sourceUrl') or notice['sourceUrl'],'description':(p.get('description') or notice.get('description') or '商品資料')[:600 if legacy else 400],'image':{'url':image},'color':0x55734C,'fields':fields}
     if notice.get('publishedAt'):main['timestamp']=notice['publishedAt']
     embeds=[main]
     for server,label in [('mainland','陸服'),('international','國際服')]:
         o=latest_offer(p,server)
         if not o:continue
-        price=price_text(o)
-        values=[{'name':'價格','value':price[:80],'inline':True},{'name':'取得方式','value':o['method'],'inline':True},{'name':'期間','value':period(o.get('startsAt'))+' ～ '+period(o.get('endsAt'))},{'name':'用券條件','value':(o.get('coupons') or '尚未確認')[:350]}]
-        if o.get('note'):values.append({'name':'說明','value':o['note'][:350]})
+        values=[{'name':'價格' if legacy else '原價／一般售價','value':regular_price_text(o)[:80],'inline':True},{'name':'取得方式','value':o['method'],'inline':True},{'name':'期間','value':period(o.get('startsAt'))+' ～ '+period(o.get('endsAt'))}]
+        if not legacy and o.get('salePrice') is not None:
+            values.extend([{'name':'上架優惠價','value':f"{o['salePrice']:,} {o['currency']}"[:80],'inline':True},{'name':'上架優惠期間','value':period(o.get('saleStartsAt'),True)+' ～ '+period(o.get('saleEndsAt'),True)}])
+            if o.get('saleNote'):values.append({'name':'優惠說明','value':o['saleNote'][:200]})
+        values.append({'name':'用券條件','value':(o.get('coupons') or '尚未確認')[:350 if legacy else 250]})
+        if o.get('note'):values.append({'name':'說明','value':o['note'][:350 if legacy else 200]})
         embeds.append({'title':label+'｜販售紀錄','url':o['sourceUrl'],'color':0x55734C if server=='mainland' else 0xA6744F,'fields':values,'footer':{'text':'來源日期：'+(o.get('sourceDate') or '未確認')}})
-    return {'username':'燕雲快報｜商品前瞻','content':('📝 **商品資料更新**' if is_update else '🛍️ **商品前瞻與購買資料**')+'\n陸服與國際服分別記錄；歷次整理保留在本篇。','allowed_mentions':{'parse':[]},'embeds':embeds}
+    content=(('📝 **商品資料更新**' if is_update else '🛍️ **商品前瞻與購買資料**')+'\n陸服與國際服分別記錄；歷次整理保留在本篇。') if legacy else ''
+    return {'username':'燕雲快報｜商品前瞻','content':content,'allowed_mentions':{'parse':[]},'embeds':embeds}
 
 def recovery_match(message,notice):
     # Old posts may still contain a visible recovery marker. New posts are matched
@@ -222,9 +233,10 @@ def recovery_match(message,notice):
             except (ValueError,TypeError):value['timestamp']=e['timestamp']
         return value
     actual=[embed_value(e) for e in message.get('embeds',[])]
-    for update in [False,True]:
-        expected=forum_payload(notice,update)
-        if message.get('content')==expected['content'] and actual==[embed_value(e) for e in expected['embeds']]:return True
+    for legacy_format in [False,True]:
+        for update in [False,True]:
+            expected=forum_payload(notice,update,legacy_format)
+            if (message.get('content') or '')==expected['content'] and actual==[embed_value(e) for e in expected['embeds']]:return True
     return False
 
 def deliver(token,recover_url=''):
