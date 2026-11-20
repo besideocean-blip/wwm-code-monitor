@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect official CN shopping articles and deliver approved catalog notices.
+"""Collect official CN shopping articles and deliver catalog notices.
 
 Python standard library only. GitHub OIDC authenticates to the catalog; the
 forum-only Discord secret stays in GitHub, never in the website bundle.
@@ -232,10 +232,12 @@ def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
     if international and show_dates:fields.append({'name':'國際服上架日期','value':listing_date(international),'inline':True})
     if legacy:fields.append({'name':'分類','value':p.get('category') or '其他','inline':True})
     fields.append({'name':'國際服狀態','value':status,'inline':True})
+    if not legacy and p.get('autoPublishedAt') and not p.get('checkedAt'):fields.append({'name':'資料狀態','value':'自動整理・待核對','inline':True})
     if p.get('internationalEvidenceUrl'):fields.append({'name':'國際服依據','value':'[官方公告]('+p['internationalEvidenceUrl']+')'})
     if p.get('videoUrl'):fields.append({'name':'效果展示','value':'[觀看影片]('+p['videoUrl']+')'})
     fields.append({'name':'商品圖鑑','value':'[圖片與更多販售紀錄]('+SITE+notice['url']+')'})
-    main={'title':name[:100],'url':p.get('sourceUrl') or notice['sourceUrl'],'description':(p.get('description') or notice.get('description') or '商品資料')[:600 if legacy else 400],'image':{'url':image},'color':0x55734C,'fields':fields}
+    main={'title':name[:100],'url':p.get('sourceUrl') or notice['sourceUrl'],'description':(p.get('description') or notice.get('description') or '商品資料')[:600 if legacy else 400],'color':0x55734C,'fields':fields}
+    if image:main['image']={'url':image}
     if notice.get('publishedAt'):main['timestamp']=notice['publishedAt']
     embeds=[main]
     for server,label in [('mainland','陸服'),('international','國際服')]:
@@ -345,11 +347,11 @@ def main():
             print(json.dumps({'count':len(articles),'articles':[{'title':a['title'],'url':a['url'],'publishedAt':a['publishedAt']} for a in articles]},ensure_ascii=False,indent=2));return 0
         token=oidc_token();data=json_request(SITE+'/api/products/ingest',method='POST',body={'articles':articles,'runId':os.environ.get('GITHUB_RUN_ID','')},headers={'Authorization':'Bearer '+token})
         sent=deliver(token)
-        message=f'已檢查 {len(articles)} 篇購物相關公告；新增待整理 {data["added"]} 篇；自動建立待核對草稿 {data.get("draftsCreated",0)} 件；Discord 推送 {sent} 則。'
+        message=f'已檢查 {len(articles)} 篇購物相關公告；新增公告 {data["added"]} 篇；自動新增商品 {data.get("draftsCreated",0)} 件；自動發布 {data.get("autoPublished",0)} 件；Discord 推送 {sent} 則。'
         print(message)
         summary=os.environ.get('GITHUB_STEP_SUMMARY')
         if summary:
-            with open(summary,'a',encoding='utf-8') as f:f.write('## 陸服商品前瞻\n\n✅ '+message+'\n\n商品需經管理者確認發布，才會推播；首次不發送整批舊公告。\n')
+            with open(summary,'a',encoding='utf-8') as f:f.write('## 陸服商品前瞻\n\n✅ '+message+'\n\n新商品會自動加入圖鑑並推播；資料標示自動整理，管理者可後續修正。\n')
         return 0
     except MonitorError as e:
         print('ERROR: '+str(e),file=sys.stderr);return 1
