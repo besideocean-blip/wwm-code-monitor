@@ -27,8 +27,8 @@ VOID={'br','img','input','meta','link','hr','source','area','base','embed','para
 class MonitorError(Exception): pass
 
 class HttpError(MonitorError):
-    def __init__(self,status,service='來源／同步服務',detail=''):
-        self.status=status
+    def __init__(self,status,service='來源／同步服務',detail='',api_code=None):
+        self.status=status;self.api_code=api_code
         super().__init__(f'{service}回應 HTTP {status}'+('（'+detail+'）' if detail else '')+'；未清空整理紀錄。')
 
 def response_error(url,raw):
@@ -36,12 +36,12 @@ def response_error(url,raw):
     u=urllib.parse.urlsplit(url)
     discord=u.hostname in {'discord.com','discordapp.com','ptb.discord.com','canary.discord.com'}
     service='Discord 論壇' if discord else '網站公告同步' if url.startswith(SITE+'/api/products/ingest') else '網站推播回執' if url.startswith(SITE+'/api/products/notifications') else '陸服官網' if u.hostname=='www.yysls.cn' else '來源／同步服務'
-    if not discord:return service,''
+    if not discord:return service,'',None
     try:data=json.loads(raw)
-    except (ValueError,UnicodeError):return service,''
-    if not isinstance(data,dict):return service,''
+    except (ValueError,UnicodeError):return service,'',None
+    if not isinstance(data,dict):return service,'',None
     details=['代碼 '+str(data['code'])] if isinstance(data.get('code'),int) else []
-    if data.get('code')==10003:details.append('找不到原頻道／貼文，請核對原貼文連結與存取權限；未另開重複貼文')
+    if data.get('code')==10003:details.append('找不到指定頻道／貼文')
     keys={'embeds','fields','name','value','inline','title','description','footer','text','timestamp','image','url','thread_id','thread_name','applied_tags','content','username','avatar_url','allowed_mentions','flags'}
     def visit(value,path=(),depth=0):
         if not isinstance(value,dict) or depth>8 or len(details)>=9:return
@@ -53,7 +53,7 @@ def response_error(url,raw):
         for key,child in value.items():
             if isinstance(key,str) and (key in keys or re.fullmatch('[0-9]{1,2}',key)):visit(child,(*path,key),depth+1)
     visit(data.get('errors'))
-    return service,'；'.join(details[:9])
+    return service,'；'.join(details[:9]),data.get('code') if isinstance(data.get('code'),int) else None
 
 def source_url(value):
     u=urllib.parse.urlsplit(urllib.parse.urljoin(SOURCE,value))
@@ -128,8 +128,8 @@ def request(url,method='GET',body=None,headers=None):
             except (OSError,ValueError):error_body=b''
             finally:e.close()
             if method=='GET' and code in {429,500,502,503,504} and n+1<attempts:time.sleep(n+1);continue
-            service,detail=response_error(url,error_body)
-            raise HttpError(code,service,detail) from None
+            service,detail,api_code=response_error(url,error_body)
+            raise HttpError(code,service,detail,api_code) from None
         except (urllib.error.URLError,TimeoutError,OSError):
             if n+1<attempts:time.sleep(n+1);continue
             raise MonitorError('來源／同步服務連線失敗；請稍後重試。') from None
@@ -307,17 +307,30 @@ def deliver(token,recover_url=''):
             if t['destination'] in notice.get('deliveredTo',[]):continue
             begun=receipt(notice,t,'begin')
             if begun.get('alreadyDelivered'):continue
-            thread=begun.get('threadId') or ''
-            payload=forum_payload(notice,bool(thread));query={'wait':'true'}
-            if thread:query['thread_id']=thread
-            else:payload['thread_name']=('【'+(notice.get('product') or {}).get('category','商品')+'】'+notice['name'])[:100]
-            try:result=json_request(t['hook']+'?'+urllib.parse.urlencode(query),method='POST',body=payload)
+            thread=begun.get('threadId') or '';recreated=False
+            def send_to_thread(thread_id):
+                payload=forum_payload(notice,bool(thread_id));query={'wait':'true'}
+                if thread_id:query['thread_id']=thread_id
+                else:payload['thread_name']=('【'+(notice.get('product') or {}).get('category','商品')+'】'+notice['name'])[:100]
+                return json_request(t['hook']+'?'+urllib.parse.urlencode(query),method='POST',body=payload)
+            rejected={400,401,403,404,405,413,415,429}
+            try:result=send_to_thread(thread)
             except HttpError as e:
-                if e.status in {400,401,403,404,405,413,415,429}:receipt(notice,t,'cancel')
-                raise
+                if not (thread and e.status in {400,404} and e.api_code==10003):
+                    if e.status in rejected:receipt(notice,t,'cancel')
+                    raise
+                # A definite rejection of the old thread is safe to replace. Keep
+                # the same claim so a failed new send cannot start duplicate posts.
+                receipt(notice,t,'recreate',threadId=thread,discordCode=10003)
+                thread='';recreated=True
+                try:result=send_to_thread('')
+                except HttpError as retry:
+                    if retry.status in rejected:receipt(notice,t,'cancel')
+                    raise
             if not snowflake(result.get('id')) or not snowflake(result.get('channel_id')) or result['channel_id']==t['channelId'] or (thread and result['channel_id']!=thread):
                 raise MonitorError('Discord 傳送結果尚未確認；已暫停該商品重送，請核對論壇後使用復原操作。')
             receipt(notice,t,'complete',guildId=t['guildId'],threadId=result['channel_id'],messageId=result['id'])
+            if recreated:print('原商品論壇貼文不存在，已重新建立貼文；後續更新沿用新篇：https://discord.com/channels/'+t['guildId']+'/'+result['channel_id'])
             sent+=1
     return sent
 
