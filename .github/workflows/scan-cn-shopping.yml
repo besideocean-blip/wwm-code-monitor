@@ -1,0 +1,40 @@
+name: Scan WWM CN shopping
+on:
+  schedule:
+    - cron: '23 */3 * * *'
+  push:
+    paths:
+      - scan_cn_shopping.py
+      - .github/workflows/scan-cn-shopping.yml
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'scan：同步待整理公告並推送已發布商品；preview：只讀取官網'
+        type: choice
+        default: scan
+        options: [scan, preview]
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: wwm-cn-shopping-v1
+  cancel-in-progress: false
+jobs:
+  scan:
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    environment: discord-production
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Collect CN shopping and deliver approved notices
+        env:
+          MODE: ${{ inputs.mode || 'scan' }}
+          OFFICIAL_DISCORD_WEBHOOK_URLS: ${{ secrets.OFFICIAL_DISCORD_WEBHOOK_URLS }}
+          PYTHONUNBUFFERED: '1'
+        run: python scan_cn_shopping.py --mode "$MODE"
