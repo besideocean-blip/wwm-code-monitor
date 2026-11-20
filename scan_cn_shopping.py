@@ -273,7 +273,7 @@ def offer_notes(offer):
         if value not in values:values.append(value)
     return '\n'.join(values)
 
-def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
+def forum_payload_v2(notice,is_update=False,legacy=False,listing_dates=True):
     if legacy:return forum_payload_v1(notice,is_update,legacy,listing_dates)
     payload=forum_payload_v1(notice,is_update,False,listing_dates)
     p=notice.get('product') or {};main=payload['embeds'][0]
@@ -302,6 +302,13 @@ def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
         if note:embed['fields'].append({'name':'備註','value':note[:700]})
     return payload
 
+def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
+    payload=forum_payload_v2(notice,is_update,legacy,listing_dates)
+    if not legacy:
+        for embed in payload['embeds']:
+            embed['fields']=[field for field in embed.get('fields',[]) if field['name']!='國際服狀態']
+    return payload
+
 def recovery_match(message,notice):
     # Old posts may still contain a visible recovery marker. New posts are matched
     # against the exact saved content, prices, sources and publication timestamp.
@@ -319,7 +326,7 @@ def recovery_match(message,notice):
     actual=[embed_value(e) for e in message.get('embeds',[])]
     for legacy_format,listing_dates in [(False,True),(False,False),(True,False)]:
         for update in [False,True]:
-            for formatter in [forum_payload,forum_payload_v1]:
+            for formatter in [forum_payload,forum_payload_v2,forum_payload_v1]:
                 expected=formatter(notice,update,legacy_format,listing_dates)
                 if (message.get('content') or '')==expected['content'] and actual==[embed_value(e) for e in expected['embeds']]:return True
     return False

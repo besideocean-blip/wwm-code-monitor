@@ -1,4 +1,18 @@
-{"requests":[
- {"requestId":"20261120-remove-ghost-functional","action":"delete","productId":"auto-e32e96345f0af890c7fda02a3221","revision":2},
- {"requestId":"20261120-refresh-product-posts-v2","action":"refresh_all"}
-]}
+{
+  "requests": [
+    {
+      "requestId": "20261120-remove-ghost-functional",
+      "action": "delete",
+      "productId": "auto-e32e96345f0af890c7fda02a3221",
+      "revision": 2
+    },
+    {
+      "requestId": "20261120-refresh-product-posts-v2",
+      "action": "refresh_all"
+    },
+    {
+      "requestId": "20261120-remove-global-status",
+      "action": "refresh_all"
+    }
+  ]
+}
