@@ -63,3 +63,15 @@ Discord 與網站無法共用資料庫交易。程式在發送前會先留下傳
 - Discord 論壇：https://support.discord.com/hc/en-us/articles/6208479917079-Forum-Channels-FAQ
 - Webhook API：https://docs.discord.com/developers/resources/webhook
 - GitHub secrets：https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets
+
+## 自動整理初稿
+
+收集公告後，系統會依明確商品名稱與段落自動建立待核對初稿，並補整理尚未完成的舊公告。登入管理者帳號後，在「全部商品」選「待核對／未發布」，按「核對初稿」即可編輯。
+
+- 初稿只對管理者顯示，不會自動公開或推播。
+- 同一篇公告有多個明確商品時分件建立；純玩法公告不會被當成商品。
+- 自動擷取名稱、分類、明確價格與原幣別、販售期間、用券條件、可配對的官方圖片；不明欄位留空。相對日期不推算結束日。
+- 無法可靠拆分的購物公告以「待拆分」初稿保留，仍需人工處理。
+- 重複掃描不覆寫你改過的商品，也不重建已標記暫不收錄／已處理公告的初稿。
+- 原本已整理的同名商品會略過，不擅自用新公告覆寫舊價格。
+- 發布前請補正圖片、資料確認日期並勾選「已核對資料，發布於公開商品圖鑑」。可以先儲存未完成草稿。

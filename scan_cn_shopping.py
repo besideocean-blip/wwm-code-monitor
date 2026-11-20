@@ -61,7 +61,7 @@ class ListParser(HTMLParser):
 
 class DetailParser(HTMLParser):
     def __init__(self):
-        super().__init__(convert_charrefs=True);self.stack=[];self.article_depth=None;self.parts=[];self.images=[];self.date='';self.in_date=False
+        super().__init__(convert_charrefs=True);self.stack=[];self.article_depth=None;self.parts=[];self.images=[];self.media=[];self.date='';self.in_date=False
     def handle_starttag(self,tag,attrs):
         a=dict(attrs);classes=(a.get('class') or '').split()
         if 'artText' in classes or 'art-text' in classes:self.article_depth=len(self.stack)+1
@@ -69,6 +69,7 @@ class DetailParser(HTMLParser):
         if self.article_depth:
             if tag=='img' and (a.get('src') or '').startswith('https://nie.res.netease.com/'):
                 self.images.append(a['src'])
+                self.media.append({'url':a['src'],'context':clean(''.join(self.parts)[-300:])[-240:]})
             if tag in {'p','br','section','h2','h3'}:self.parts.append('\n')
         if 'date' in classes:self.in_date=True
     def handle_endtag(self,tag):
@@ -122,7 +123,7 @@ def collect(pages=2):
         parser=DetailParser();parser.feed(request(item['url']).decode('utf-8'))
         text=parser.text()
         if not text:raise MonitorError('公告內文未完整讀取；未送出部分結果。')
-        item['text']=text;item['publishedAt']=parser.date
+        item['text']=text;item['publishedAt']=parser.date;item['media']=parser.media[:40]
         if parser.images:item['image']=parser.images[0]
         result.append(item)
         time.sleep(.15)
@@ -284,7 +285,7 @@ def main():
             print(json.dumps({'count':len(articles),'articles':[{'title':a['title'],'url':a['url'],'publishedAt':a['publishedAt']} for a in articles]},ensure_ascii=False,indent=2));return 0
         token=oidc_token();data=json_request(SITE+'/api/products/ingest',method='POST',body={'articles':articles,'runId':os.environ.get('GITHUB_RUN_ID','')},headers={'Authorization':'Bearer '+token})
         sent=deliver(token)
-        message=f'已檢查 {len(articles)} 篇購物相關公告；新增待整理 {data["added"]} 篇；Discord 推送 {sent} 則。'
+        message=f'已檢查 {len(articles)} 篇購物相關公告；新增待整理 {data["added"]} 篇；自動建立待核對草稿 {data.get("draftsCreated",0)} 件；Discord 推送 {sent} 則。'
         print(message)
         summary=os.environ.get('GITHUB_STEP_SUMMARY')
         if summary:
