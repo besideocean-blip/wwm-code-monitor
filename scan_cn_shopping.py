@@ -302,12 +302,46 @@ def forum_payload_v2(notice,is_update=False,legacy=False,listing_dates=True):
         if note:embed['fields'].append({'name':'備註','value':note[:700]})
     return payload
 
-def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
+def forum_payload_v2_without_status(notice,is_update=False,legacy=False,listing_dates=True):
     payload=forum_payload_v2(notice,is_update,legacy,listing_dates)
     if not legacy:
         for embed in payload['embeds']:
             embed['fields']=[field for field in embed.get('fields',[]) if field['name']!='國際服狀態']
     return payload
+
+def date_only(value):
+    if not value:return '未確認'
+    try:
+        if 'T' not in value:return datetime.strptime(value,'%Y-%m-%d').strftime('%Y/%m/%d')
+        return datetime.fromisoformat(value.replace('Z','+00:00')).astimezone(timezone(timedelta(hours=8))).strftime('%Y/%m/%d')
+    except (ValueError,TypeError):return '未確認'
+
+def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
+    if legacy:return forum_payload_v1(notice,is_update,True,listing_dates)
+    p=notice.get('product') or {};name=p.get('name') or notice['name'];embeds=[]
+    for server,label in [('mainland','陸服'),('international','國際服')]:
+        o=latest_offer(p,server)
+        if not o:continue
+        fields=[{'name':'原價／一般售價','value':regular_price_text(o)[:100],'inline':True},{'name':'取得方式','value':acquisition(o.get('method')),'inline':True}]
+        fields.extend([{'name':'上架日期','value':date_only(o.get('startsAt')),'inline':True},{'name':'販售結束','value':date_only(o.get('endsAt')),'inline':True}])
+        if o.get('salePrice') is not None:
+            fields.extend([{'name':'上架優惠價','value':f"{o['salePrice']:,} {o['currency']}"[:100],'inline':True},{'name':'上架優惠期間','value':date_only(o.get('saleStartsAt'))+' ～ '+date_only(o.get('saleEndsAt'))}])
+            if o.get('saleNote'):fields.append({'name':'優惠說明','value':o['saleNote'][:700]})
+        note=offer_notes(o)
+        if note:fields.append({'name':'備註','value':note[:700]})
+        fields.append({'name':'依據公告','value':'[官方公告]('+o['sourceUrl']+')・'+date_only(o.get('sourceDate'))})
+        embed={'title':(name+'｜'+label+'商品資訊')[:180],'url':o['sourceUrl'],'color':0x55734C if server=='mainland' else 0xA6744F,'fields':fields}
+        embeds.append(embed)
+    if not embeds:
+        embeds=[{'title':name[:100],'url':p.get('sourceUrl') or notice['sourceUrl'],'color':0x55734C,'fields':[]}]
+    first=embeds[0];description=p.get('description') or notice.get('description') or ''
+    if description:first['description']=description[:600]
+    image=p.get('image','') if p else notice.get('image','')
+    if image:first['image']={'url':SITE+image if image.startswith('/') else image}
+    if p.get('videoUrl'):first['fields'].append({'name':'效果展示','value':'[觀看影片]('+p['videoUrl']+')'})
+    if p.get('notes'):first['fields'].append({'name':'商品備註','value':p['notes'][:700]})
+    embeds[-1]['fields'].append({'name':'\u200b','value':'[更多商品詳情]('+SITE+notice['url']+')'})
+    return {'content':'','embeds':embeds,'allowed_mentions':{'parse':[]}}
 
 def recovery_match(message,notice):
     # Old posts may still contain a visible recovery marker. New posts are matched
@@ -326,7 +360,7 @@ def recovery_match(message,notice):
     actual=[embed_value(e) for e in message.get('embeds',[])]
     for legacy_format,listing_dates in [(False,True),(False,False),(True,False)]:
         for update in [False,True]:
-            for formatter in [forum_payload,forum_payload_v2,forum_payload_v1]:
+            for formatter in [forum_payload,forum_payload_v2_without_status,forum_payload_v2,forum_payload_v1]:
                 expected=formatter(notice,update,legacy_format,listing_dates)
                 if (message.get('content') or '')==expected['content'] and actual==[embed_value(e) for e in expected['embeds']]:return True
     return False
@@ -367,7 +401,7 @@ def deliver(token,recover_url=''):
             thread=begun.get('threadId') or '';recreated=False
             def send_to_thread(thread_id):
                 payload=forum_payload(notice,bool(thread_id));query={'wait':'true'}
-                if thread_id and notice.get('replaceOpening'):
+                if thread_id:
                     body={key:payload[key] for key in ['content','embeds','allowed_mentions']}
                     return json_request(t['hook']+'/messages/'+thread_id+'?thread_id='+thread_id,method='PATCH',body=body)
                 if thread_id:query['thread_id']=thread_id
