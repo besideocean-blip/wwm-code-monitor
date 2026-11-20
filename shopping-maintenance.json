@@ -27,6 +27,10 @@
     {
       "requestId": "20261121-compact-product-posts-hide-period-source",
       "action": "refresh_all"
+    },
+    {
+      "requestId": "20261121-product-posts-hide-notes",
+      "action": "refresh_all"
     }
   ]
 }
