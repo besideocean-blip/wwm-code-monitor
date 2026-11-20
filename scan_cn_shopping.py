@@ -189,14 +189,19 @@ def price_text(offer):
     original='原價未確認' if offer.get('price') is None else '原價：'+regular_price_text(offer)
     return original+'\n上架優惠：'+f"{offer['salePrice']:,} {offer['currency']}"
 
-def forum_payload(notice,is_update=False,legacy=False):
+def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
     p=notice.get('product') or {};name=p.get('name') or notice['name'];image=p.get('image') or notice['image']
     if image.startswith('/'):image=SITE+image
     status={'unknown':'待查證','unreleased':'尚未上架','announced':'官方已預告','released':'曾於國際服上架'}.get(p.get('internationalStatus') or notice.get('internationalStatus'),'待查證')
     pricing=regular_price_text if legacy else price_text
-    fields=[{'name':'陸服價格','value':pricing(latest_offer(p,'mainland'))[:180],'inline':True}]
+    show_dates=listing_dates and not legacy
+    def listing_date(o):return period(o.get('startsAt')) if o and o.get('startsAt') else '待確認'
+    mainland=latest_offer(p,'mainland')
+    fields=[{'name':'陸服價格','value':pricing(mainland)[:180],'inline':True}]
+    if show_dates:fields.append({'name':'陸服上架日期','value':listing_date(mainland),'inline':True})
     international=latest_offer(p,'international')
     if international:fields.append({'name':'國際服價格','value':pricing(international)[:180],'inline':True})
+    if international and show_dates:fields.append({'name':'國際服上架日期','value':listing_date(international),'inline':True})
     if legacy:fields.append({'name':'分類','value':p.get('category') or '其他','inline':True})
     fields.append({'name':'國際服狀態','value':status,'inline':True})
     if p.get('internationalEvidenceUrl'):fields.append({'name':'國際服依據','value':'[官方公告]('+p['internationalEvidenceUrl']+')'})
@@ -208,7 +213,9 @@ def forum_payload(notice,is_update=False,legacy=False):
     for server,label in [('mainland','陸服'),('international','國際服')]:
         o=latest_offer(p,server)
         if not o:continue
-        values=[{'name':'價格' if legacy else '原價／一般售價','value':regular_price_text(o)[:80],'inline':True},{'name':'取得方式','value':o['method'],'inline':True},{'name':'期間','value':period(o.get('startsAt'))+' ～ '+period(o.get('endsAt'))}]
+        values=[{'name':'價格' if legacy else '原價／一般售價','value':regular_price_text(o)[:80],'inline':True},{'name':'取得方式','value':o['method'],'inline':True}]
+        if show_dates:values.extend([{'name':'上架日期','value':listing_date(o),'inline':True},{'name':'販售結束','value':period(o.get('endsAt')),'inline':True}])
+        else:values.append({'name':'期間','value':period(o.get('startsAt'))+' ～ '+period(o.get('endsAt'))})
         if not legacy and o.get('salePrice') is not None:
             values.extend([{'name':'上架優惠價','value':f"{o['salePrice']:,} {o['currency']}"[:80],'inline':True},{'name':'上架優惠期間','value':period(o.get('saleStartsAt'),True)+' ～ '+period(o.get('saleEndsAt'),True)}])
             if o.get('saleNote'):values.append({'name':'優惠說明','value':o['saleNote'][:200]})
@@ -233,9 +240,9 @@ def recovery_match(message,notice):
             except (ValueError,TypeError):value['timestamp']=e['timestamp']
         return value
     actual=[embed_value(e) for e in message.get('embeds',[])]
-    for legacy_format in [False,True]:
+    for legacy_format,listing_dates in [(False,True),(False,False),(True,False)]:
         for update in [False,True]:
-            expected=forum_payload(notice,update,legacy_format)
+            expected=forum_payload(notice,update,legacy_format,listing_dates)
             if (message.get('content') or '')==expected['content'] and actual==[embed_value(e) for e in expected['embeds']]:return True
     return False
 
