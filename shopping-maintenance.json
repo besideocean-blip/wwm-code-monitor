@@ -13,6 +13,16 @@
     {
       "requestId": "20261120-remove-global-status",
       "action": "refresh_all"
+    },
+    {
+      "requestId": "20261121-match-existing-jin-zhao-yu",
+      "action": "republish",
+      "productId": "jin-zhao-yu"
+    },
+    {
+      "requestId": "20261121-match-existing-hong-ye-xiao-xiao",
+      "action": "republish",
+      "productId": "hong-ye-xiao-xiao"
     }
   ]
 }

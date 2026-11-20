@@ -316,7 +316,7 @@ def date_only(value):
         return datetime.fromisoformat(value.replace('Z','+00:00')).astimezone(timezone(timedelta(hours=8))).strftime('%Y/%m/%d')
     except (ValueError,TypeError):return '未確認'
 
-def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
+def forum_payload_compact(notice,is_update=False,legacy=False,listing_dates=True):
     if legacy:return forum_payload_v1(notice,is_update,True,listing_dates)
     p=notice.get('product') or {};name=p.get('name') or notice['name'];embeds=[]
     for server,label in [('mainland','陸服'),('international','國際服')]:
@@ -343,11 +343,31 @@ def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
     embeds[-1]['fields'].append({'name':'\u200b','value':'[更多商品詳情]('+SITE+notice['url']+')'})
     return {'content':'','embeds':embeds,'allowed_mentions':{'parse':[]}}
 
-def recovery_match(message,notice):
-    # Old posts may still contain a visible recovery marker. New posts are matched
-    # against the exact saved content, prices, sources and publication timestamp.
-    legacy='商品編號：'+notice['productId']+'｜推播：'+notice['id']
-    if any(e.get('footer',{}).get('text')==legacy for e in message.get('embeds',[])):return True
+def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
+    if legacy:return forum_payload_v1(notice,is_update,True,listing_dates)
+    payload=forum_payload_v2_without_status(notice,is_update,False,listing_dates)
+    product=notice.get('product') or {};main=payload['embeds'][0]
+    main.pop('timestamp',None)
+    # Keep the established product cover plus one latest record per server.
+    # Only the date values change; no separate server source is invented.
+    for server,label in [('mainland','陸服'),('international','國際服')]:
+        offer=latest_offer(product,server)
+        if not offer:
+            main['fields']=[f for f in main['fields'] if f['name'] not in {label+'價格',label+'上架日期'}]
+            continue
+        for field in main['fields']:
+            if field['name']==label+'上架日期':field['value']=date_only(offer.get('startsAt')) if offer.get('startsAt') else '待確認'
+    for embed,server in zip(payload['embeds'][1:],[server for server in ['mainland','international'] if latest_offer(product,server)]):
+        offer=latest_offer(product,server)
+        for field in embed['fields']:
+            if field['name']=='上架日期':field['value']=date_only(offer.get('startsAt')) if offer.get('startsAt') else '待確認'
+            elif field['name']=='販售結束':field['value']=date_only(offer.get('endsAt'))
+            elif field['name']=='期間':field['value']=date_only(offer.get('startsAt'))+' ～ '+date_only(offer.get('endsAt'))
+            elif field['name']=='上架優惠期間':field['value']=date_only(offer.get('saleStartsAt'))+' ～ '+date_only(offer.get('saleEndsAt'))
+        embed['footer']={'text':'來源日期：'+date_only(offer.get('sourceDate'))}
+    return payload
+
+def message_matches_payload(message,payload):
     def embed_value(e):
         value={k:e.get(k) for k in ['title','description','url','color'] if k in e}
         value['fields']=[{'name':f.get('name'),'value':f.get('value'),'inline':bool(f.get('inline',False))} for f in e.get('fields',[])]
@@ -357,12 +377,18 @@ def recovery_match(message,notice):
             try:value['timestamp']=datetime.fromisoformat(e['timestamp'].replace('Z','+00:00')).astimezone(timezone.utc).isoformat()
             except (ValueError,TypeError):value['timestamp']=e['timestamp']
         return value
-    actual=[embed_value(e) for e in message.get('embeds',[])]
+    return (message.get('content') or '')==payload.get('content','') and [embed_value(e) for e in message.get('embeds',[])]==[embed_value(e) for e in payload.get('embeds',[])]
+
+def recovery_match(message,notice):
+    # Old posts may still contain a visible recovery marker. New posts are matched
+    # against the exact saved content, prices, sources and publication timestamp.
+    legacy='商品編號：'+notice['productId']+'｜推播：'+notice['id']
+    if any(e.get('footer',{}).get('text')==legacy for e in message.get('embeds',[])):return True
     for legacy_format,listing_dates in [(False,True),(False,False),(True,False)]:
         for update in [False,True]:
-            for formatter in [forum_payload,forum_payload_v2_without_status,forum_payload_v2,forum_payload_v1]:
+            for formatter in [forum_payload,forum_payload_compact,forum_payload_v2_without_status,forum_payload_v2,forum_payload_v1]:
                 expected=formatter(notice,update,legacy_format,listing_dates)
-                if (message.get('content') or '')==expected['content'] and actual==[embed_value(e) for e in expected['embeds']]:return True
+                if message_matches_payload(message,expected):return True
     return False
 
 def deliver(token,recover_url=''):
@@ -423,7 +449,12 @@ def deliver(token,recover_url=''):
                     raise
             if not snowflake(result.get('id')) or not snowflake(result.get('channel_id')) or result['channel_id']==t['channelId'] or (thread and result['channel_id']!=thread):
                 raise MonitorError('Discord 傳送結果尚未確認；已暫停該商品重送，請核對論壇後使用復原操作。')
+            expected=forum_payload(notice,bool(thread))
+            stored=json_request(t['hook']+'/messages/'+result['id']+'?thread_id='+result['channel_id']) if thread else result
+            if not message_matches_payload(stored,expected):
+                raise MonitorError('Discord 首篇內容核對未通過，已保留待確認狀態；未建立其他貼文。')
             receipt(notice,t,'complete',guildId=t['guildId'],threadId=result['channel_id'],messageId=result['id'])
+            print('已核對商品首篇：'+notice['productId']+'；'+str(len(expected['embeds']))+' 張卡片。')
             if recreated:print('原商品論壇貼文不存在，已重新建立貼文；後續更新沿用新篇：https://discord.com/channels/'+t['guildId']+'/'+result['channel_id'])
             sent+=1
     return sent
