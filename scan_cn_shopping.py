@@ -375,13 +375,20 @@ def forum_payload_compact_with_notes(notice,is_update=False,legacy=False,listing
         embed['fields']=[field for field in embed.get('fields',[]) if field['name'] not in hidden]
     return payload
 
-def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
+def forum_payload_before_pool_rename(notice,is_update=False,legacy=False,listing_dates=True):
     # Historical renderers remain available only to identify uncertain deliveries.
     # New posts and opening-message updates share this note-free display policy.
     payload=forum_payload_compact_with_notes(notice,is_update,legacy,listing_dates)
     hidden={'備註','商品備註','優惠說明'}
     for embed in payload['embeds']:
         embed['fields']=[field for field in embed.get('fields',[]) if field['name'] not in hidden]
+    return payload
+
+def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
+    payload=forum_payload_before_pool_rename(notice,is_update,legacy,listing_dates)
+    for embed in payload['embeds']:
+        for field in embed.get('fields',[]):
+            if field['name']=='取得方式':field['value']=field['value'].replace('活動抽取','轉盤獎池')
     return payload
 
 def message_matches_payload(message,payload):
@@ -403,7 +410,7 @@ def recovery_match(message,notice):
     if any(e.get('footer',{}).get('text')==legacy for e in message.get('embeds',[])):return True
     for legacy_format,listing_dates in [(False,True),(False,False),(True,False)]:
         for update in [False,True]:
-            for formatter in [forum_payload,forum_payload_compact_with_notes,forum_payload_full,forum_payload_compact,forum_payload_v2_without_status,forum_payload_v2,forum_payload_v1]:
+            for formatter in [forum_payload,forum_payload_before_pool_rename,forum_payload_compact_with_notes,forum_payload_full,forum_payload_compact,forum_payload_v2_without_status,forum_payload_v2,forum_payload_v1]:
                 expected=formatter(notice,update,legacy_format,listing_dates)
                 if message_matches_payload(message,expected):return True
     return False

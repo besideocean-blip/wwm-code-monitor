@@ -31,6 +31,10 @@
     {
       "requestId": "20261121-product-posts-hide-notes",
       "action": "refresh_all"
+    },
+    {
+      "requestId": "20261121-rename-activity-draw-to-wheel-pool",
+      "action": "refresh_all"
     }
   ]
 }
