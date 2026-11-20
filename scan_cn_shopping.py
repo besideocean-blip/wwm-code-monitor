@@ -18,6 +18,7 @@ import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 SOURCE='https://www.yysls.cn/news/'
 SITE='https://ruanni-yanwu-teahouse.besideocean.chatgpt.site'
@@ -63,6 +64,10 @@ def source_url(value):
 
 def clean(value): return ' '.join(value.split())
 
+def official_video(value):
+    u=urllib.parse.urlsplit(value)
+    return u.scheme=='https' and u.hostname in {'yysls.fp.ps.netease.com','nie.v.netease.com','nie.res.netease.com','www.yysls.cn','www.wherewindsmeetgame.com'} and not u.username and not u.password and u.port in {None,443} and bool(re.search(r'\.(?:mp4|webm)$',u.path,re.I))
+
 class ListParser(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True);self.items=[];self.current=None;self.depth=0
@@ -91,9 +96,11 @@ class DetailParser(HTMLParser):
         if 'artText' in classes or 'art-text' in classes:self.article_depth=len(self.stack)+1
         if tag not in VOID:self.stack.append(tag)
         if self.article_depth:
-            if tag=='img' and (a.get('src') or '').startswith('https://nie.res.netease.com/'):
+            if tag=='img' and (a.get('src') or '').startswith('https://nie.res.netease.com/') and not re.search(r'video_cover_default|loading|spacer',a['src'],re.I):
                 self.images.append(a['src'])
-                self.media.append({'url':a['src'],'context':clean(''.join(self.parts)[-300:])[-240:]})
+                self.media.append({'url':a['src'],'kind':'image','context':clean(''.join(self.parts)[-300:])[-240:]})
+            video=a.get('data-movieurl') or (a.get('src') if tag in {'video','source'} else '')
+            if video and official_video(video):self.media.append({'url':video,'kind':'video','context':clean(''.join(self.parts)[-300:])[-240:]})
             if tag in {'p','br','section','h2','h3'}:self.parts.append('\n')
         if 'date' in classes:self.in_date=True
     def handle_endtag(self,tag):
@@ -151,7 +158,7 @@ def collect(pages=2):
         parser=DetailParser();parser.feed(request(item['url']).decode('utf-8'))
         text=parser.text()
         if not text:raise MonitorError('公告內文未完整讀取；未送出部分結果。')
-        item['text']=text;item['publishedAt']=parser.date;item['media']=parser.media[:40]
+        item['text']=text;item['publishedAt']=parser.date;item['media']=parser.media[:80]
         if parser.images:item['image']=parser.images[0]
         result.append(item)
         time.sleep(.15)
@@ -217,7 +224,7 @@ def price_text(offer):
     original='原價未確認' if offer.get('price') is None else '原價：'+regular_price_text(offer)
     return original+'\n上架優惠：'+f"{offer['salePrice']:,} {offer['currency']}"
 
-def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
+def forum_payload_v1(notice,is_update=False,legacy=False,listing_dates=True):
     p=notice.get('product') or {};name=p.get('name') or notice['name'];image=p.get('image') or notice['image']
     if image.startswith('/'):image=SITE+image
     status={'unknown':'待查證','unreleased':'尚未上架','announced':'官方已預告','released':'曾於國際服上架'}.get(p.get('internationalStatus') or notice.get('internationalStatus'),'待查證')
@@ -255,6 +262,46 @@ def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
     content=(('📝 **商品資料更新**' if is_update else '🛍️ **商品前瞻與購買資料**')+'\n陸服與國際服分別記錄；歷次整理保留在本篇。') if legacy else ''
     return {'username':'燕雲快報｜商品前瞻','content':content,'allowed_mentions':{'parse':[]},'embeds':embeds}
 
+def acquisition(value):
+    return {'直購':'商店直購','抽取':'其他'}.get(value,value or '未確認')
+
+def offer_notes(offer):
+    values=[]
+    for key in ['note','coupons']:
+        value=(offer.get(key) or '').strip()
+        if not value or re.search(r'用券條件待核對|價格[／/]取得方式待核對|自動整理初稿|國際服資訊待查證',value):continue
+        if value not in values:values.append(value)
+    return '\n'.join(values)
+
+def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
+    if legacy:return forum_payload_v1(notice,is_update,legacy,listing_dates)
+    payload=forum_payload_v1(notice,is_update,False,listing_dates)
+    p=notice.get('product') or {};main=payload['embeds'][0]
+    # A deliberately cleared image on the current product must not fall back to
+    # a stale snapshot image, especially for an item with only an official video.
+    image=p.get('image','') if p else notice.get('image','')
+    main.pop('image',None)
+    if image:main['image']={'url':SITE+image if image.startswith('/') else image}
+    fields=[f for f in main['fields'] if f['name'] not in {'資料狀態','商品圖鑑','國際服依據'}]
+    methods=[]
+    for server,label in [('mainland','陸服'),('international','國際服')]:
+        o=latest_offer(p,server)
+        if o:methods.append((label,acquisition(o.get('method'))))
+    method='；'.join(label+'：'+value for label,value in methods) if len(methods)>1 else methods[0][1] if methods else '未確認'
+    index=next((i for i,f in enumerate(fields) if f['name']=='國際服狀態'),len(fields))
+    fields.insert(index,{'name':'取得方式','value':method[:300],'inline':True})
+    if p.get('notes'):fields.append({'name':'備註','value':p['notes'][:700]})
+    fields.append({'name':'\u200b','value':'[更多商品詳情]('+SITE+notice['url']+')'})
+    main['fields']=fields
+    for embed,server in zip(payload['embeds'][1:],[x for x in ['mainland','international'] if latest_offer(p,x)]):
+        offer=latest_offer(p,server)
+        embed['fields']=[f for f in embed['fields'] if f['name'] not in {'用券條件','說明'}]
+        for field in embed['fields']:
+            if field['name']=='取得方式':field['value']=acquisition(offer.get('method'))
+        note=offer_notes(offer)
+        if note:embed['fields'].append({'name':'備註','value':note[:700]})
+    return payload
+
 def recovery_match(message,notice):
     # Old posts may still contain a visible recovery marker. New posts are matched
     # against the exact saved content, prices, sources and publication timestamp.
@@ -272,8 +319,9 @@ def recovery_match(message,notice):
     actual=[embed_value(e) for e in message.get('embeds',[])]
     for legacy_format,listing_dates in [(False,True),(False,False),(True,False)]:
         for update in [False,True]:
-            expected=forum_payload(notice,update,legacy_format,listing_dates)
-            if (message.get('content') or '')==expected['content'] and actual==[embed_value(e) for e in expected['embeds']]:return True
+            for formatter in [forum_payload,forum_payload_v1]:
+                expected=formatter(notice,update,legacy_format,listing_dates)
+                if (message.get('content') or '')==expected['content'] and actual==[embed_value(e) for e in expected['embeds']]:return True
     return False
 
 def deliver(token,recover_url=''):
@@ -308,10 +356,13 @@ def deliver(token,recover_url=''):
         for t in destinations:
             if t['destination'] in notice.get('deliveredTo',[]):continue
             begun=receipt(notice,t,'begin')
-            if begun.get('alreadyDelivered'):continue
+            if begun.get('alreadyDelivered') or begun.get('cancelled'):continue
             thread=begun.get('threadId') or '';recreated=False
             def send_to_thread(thread_id):
                 payload=forum_payload(notice,bool(thread_id));query={'wait':'true'}
+                if thread_id and notice.get('replaceOpening'):
+                    body={key:payload[key] for key in ['content','embeds','allowed_mentions']}
+                    return json_request(t['hook']+'/messages/'+thread_id+'?thread_id='+thread_id,method='PATCH',body=body)
                 if thread_id:query['thread_id']=thread_id
                 else:payload['thread_name']=('【'+(notice.get('product') or {}).get('category','商品')+'】'+notice['name'])[:100]
                 return json_request(t['hook']+'?'+urllib.parse.urlencode(query),method='POST',body=payload)
@@ -336,6 +387,19 @@ def deliver(token,recover_url=''):
             sent+=1
     return sent
 
+def maintenance(token):
+    path=Path(__file__).with_name('shopping-maintenance.json')
+    if not path.exists():return
+    try:data=json.loads(path.read_text(encoding='utf-8'))
+    except (ValueError,OSError):raise MonitorError('商品維護清單無法讀取。') from None
+    requests=data.get('requests') if isinstance(data,dict) else None
+    if not isinstance(requests,list) or len(requests)>20:raise MonitorError('商品維護清單格式錯誤。')
+    for item in requests:
+        if not isinstance(item,dict) or item.get('action') not in {'delete','republish','refresh_all'} or not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,79}',str(item.get('requestId',''))):raise MonitorError('商品維護操作格式錯誤。')
+        result=json_request(SITE+'/api/products/maintenance',method='POST',body=item,headers={'Authorization':'Bearer '+token})
+        if not result.get('ok'):raise MonitorError('商品維護未完成；沒有繼續推播。')
+        if not result.get('alreadyProcessed'):print('商品維護已完成：'+item['action']+'；排入同步 '+str(result.get('queued',0))+' 件。')
+
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--mode',choices=['scan','preview'],default='scan');args=parser.parse_args()
     try:
@@ -346,8 +410,9 @@ def main():
         if args.mode=='preview':
             print(json.dumps({'count':len(articles),'articles':[{'title':a['title'],'url':a['url'],'publishedAt':a['publishedAt']} for a in articles]},ensure_ascii=False,indent=2));return 0
         token=oidc_token();data=json_request(SITE+'/api/products/ingest',method='POST',body={'articles':articles,'runId':os.environ.get('GITHUB_RUN_ID','')},headers={'Authorization':'Bearer '+token})
+        maintenance(token)
         sent=deliver(token)
-        message=f'已檢查 {len(articles)} 篇購物相關公告；新增公告 {data["added"]} 篇；自動新增商品 {data.get("draftsCreated",0)} 件；自動發布 {data.get("autoPublished",0)} 件；Discord 推送 {sent} 則。'
+        message=f'已檢查 {len(articles)} 篇購物相關公告；新增公告 {data["added"]} 篇；自動新增商品 {data.get("draftsCreated",0)} 件；自動發布 {data.get("autoPublished",0)} 件；Discord 同步 {sent} 則。'
         print(message)
         summary=os.environ.get('GITHUB_STEP_SUMMARY')
         if summary:
