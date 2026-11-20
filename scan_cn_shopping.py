@@ -41,6 +41,7 @@ def response_error(url,raw):
     except (ValueError,UnicodeError):return service,''
     if not isinstance(data,dict):return service,''
     details=['代碼 '+str(data['code'])] if isinstance(data.get('code'),int) else []
+    if data.get('code')==10003:details.append('找不到原頻道／貼文，請核對原貼文連結與存取權限；未另開重複貼文')
     keys={'embeds','fields','name','value','inline','title','description','footer','text','timestamp','image','url','thread_id','thread_name','applied_tags','content','username','avatar_url','allowed_mentions','flags'}
     def visit(value,path=(),depth=0):
         if not isinstance(value,dict) or depth>8 or len(details)>=9:return
