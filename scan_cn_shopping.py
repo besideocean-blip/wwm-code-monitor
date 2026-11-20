@@ -343,7 +343,7 @@ def forum_payload_compact(notice,is_update=False,legacy=False,listing_dates=True
     embeds[-1]['fields'].append({'name':'\u200b','value':'[更多商品詳情]('+SITE+notice['url']+')'})
     return {'content':'','embeds':embeds,'allowed_mentions':{'parse':[]}}
 
-def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
+def forum_payload_full(notice,is_update=False,legacy=False,listing_dates=True):
     if legacy:return forum_payload_v1(notice,is_update,True,listing_dates)
     payload=forum_payload_v2_without_status(notice,is_update,False,listing_dates)
     product=notice.get('product') or {};main=payload['embeds'][0]
@@ -367,6 +367,14 @@ def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
         embed['footer']={'text':'來源日期：'+date_only(offer.get('sourceDate'))}
     return payload
 
+def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
+    if legacy:return forum_payload_v1(notice,is_update,True,listing_dates)
+    payload=forum_payload_compact(notice,is_update,False,listing_dates)
+    hidden={'販售結束','上架優惠期間','依據公告'}
+    for embed in payload['embeds']:
+        embed['fields']=[field for field in embed.get('fields',[]) if field['name'] not in hidden]
+    return payload
+
 def message_matches_payload(message,payload):
     def embed_value(e):
         value={k:e.get(k) for k in ['title','description','url','color'] if k in e}
@@ -386,7 +394,7 @@ def recovery_match(message,notice):
     if any(e.get('footer',{}).get('text')==legacy for e in message.get('embeds',[])):return True
     for legacy_format,listing_dates in [(False,True),(False,False),(True,False)]:
         for update in [False,True]:
-            for formatter in [forum_payload,forum_payload_compact,forum_payload_v2_without_status,forum_payload_v2,forum_payload_v1]:
+            for formatter in [forum_payload,forum_payload_full,forum_payload_compact,forum_payload_v2_without_status,forum_payload_v2,forum_payload_v1]:
                 expected=formatter(notice,update,legacy_format,listing_dates)
                 if message_matches_payload(message,expected):return True
     return False

@@ -23,6 +23,10 @@
       "requestId": "20261121-match-existing-hong-ye-xiao-xiao",
       "action": "republish",
       "productId": "hong-ye-xiao-xiao"
+    },
+    {
+      "requestId": "20261121-compact-product-posts-hide-period-source",
+      "action": "refresh_all"
     }
   ]
 }
