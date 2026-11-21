@@ -128,7 +128,7 @@ class DetailParser(HTMLParser):
     def handle_data(self,text):
         if self.article_depth and not any(t in {'script','style'} for t in self.stack):self.parts.append(text)
         if self.in_date and re.search(r'20\d{2}[-/]\d{2}[-/]\d{2}',text):self.date=re.search(r'20\d{2}[-/]\d{2}[-/]\d{2}',text).group(0).replace('/','-')
-    def text(self):return '\n'.join(clean(p) for p in ''.join(self.parts).splitlines() if clean(p))[:14000]
+    def text(self):return '\n'.join(clean(p) for p in ''.join(self.parts).splitlines() if clean(p))[:100000]
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,*args,**kwargs):return None
@@ -178,9 +178,12 @@ def collect(pages=None,now=None):
     def detail(item):
         parser=DetailParser();parser.feed(request(item['url']).decode('utf-8'))
         text=parser.text()
-        if not text:raise MonitorError('公告內文未完整讀取；未送出部分結果。')
+        unavailable=not text
+        if unavailable:
+            print('::warning::公告無標準內文，保留商品摘要供手動整理：'+item['url'],file=sys.stderr)
+            text=item['summary']
         if not shopping_article(item['title']+'\n'+text):return None
-        item={**item,'text':text,'publishedAt':parser.date or item['publishedAt'],'media':parser.media[:80]}
+        item={**item,'text':text,'contentUnavailable':unavailable,'publishedAt':parser.date or item['publishedAt'],'media':parser.media[:80]}
         if not cutoff<=item['publishedAt']<=today.isoformat():return None
         if parser.images:item['image']=parser.images[0]
         return item
