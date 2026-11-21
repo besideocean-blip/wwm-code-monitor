@@ -35,6 +35,206 @@
     {
       "requestId": "20261121-rename-activity-draw-to-wheel-pool",
       "action": "refresh_all"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-becbaeb9db0ddca82ecf73f6ca8e",
+      "action": "repair_image",
+      "productId": "auto-becbaeb9db0ddca82ecf73f6ca8e",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20261110/f24a1d8f-1700-4c3c-9c19-8a6f98133d20.png",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/1113appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-10aa4a9d0c213c9ba795df06fb8c",
+      "action": "repair_image",
+      "productId": "auto-10aa4a9d0c213c9ba795df06fb8c",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20261110/985eb904-de9a-4234-aa60-338f497a4bf0.png",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/1113appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-2f12e7518178b7ac795ef28b3c26",
+      "action": "repair_image",
+      "productId": "auto-2f12e7518178b7ac795ef28b3c26",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20261110/06585c97-6392-415f-82dd-6a99a275549d.png",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/1113appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-4df8794bc9b2ce1f65b18c87355e",
+      "action": "repair_image",
+      "productId": "auto-4df8794bc9b2ce1f65b18c87355e",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20261110/f0422b09-32b7-46df-96a6-cde961dd00ff.png",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/1113appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-24a99ea58611e388616b970b99f0",
+      "action": "repair_image",
+      "productId": "auto-24a99ea58611e388616b970b99f0",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20261110/5717b13d-e0d8-4f27-b7f6-5372f3abab35.gif",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/1113appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-8e11ba5d655675decbc84fe879de",
+      "action": "repair_image",
+      "productId": "auto-8e11ba5d655675decbc84fe879de",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20261110/12077e41-46ff-44c2-8131-93d8a377ea8b.png",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/1113appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-daba033181db9dc362e8958ec753",
+      "action": "repair_image",
+      "productId": "auto-daba033181db9dc362e8958ec753",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20261029/74fb9321-d47f-465a-bf22-55574d6f5d6d.png",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/1029appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-fb768765ea44097628e880819581",
+      "action": "repair_image",
+      "productId": "auto-fb768765ea44097628e880819581",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20261029/d9c4bc55-7be5-4718-885f-ea62470ce34c.png",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/1029appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-dc2f661ced1b6590bdbdd2b56675",
+      "action": "repair_image",
+      "productId": "auto-dc2f661ced1b6590bdbdd2b56675",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20261029/f5ac428f-9439-4a1d-8cad-ac7e294ed2c7.png",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/1029appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-4186f642369f2c91126a5c66b82a",
+      "action": "repair_image",
+      "productId": "auto-4186f642369f2c91126a5c66b82a",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20261029/5a44fc51-b045-4cd9-a227-b9c8fd15b175.png",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/1029appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-f392ac170c02e6435f8c395998f6",
+      "action": "repair_image",
+      "productId": "auto-f392ac170c02e6435f8c395998f6",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20261029/9d9772ea-f4ac-48df-8fef-c2b3f5833e35.png",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/1029appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-a846330f3c1fffd0d7a7cd78ec0e",
+      "action": "repair_image",
+      "productId": "auto-a846330f3c1fffd0d7a7cd78ec0e",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20261020/20518993-0cbd-4565-b812-b5065c82c695.gif",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/1025appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-ac03001b6de6d3424ecac09bcf0e",
+      "action": "repair_image",
+      "productId": "auto-ac03001b6de6d3424ecac09bcf0e",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20261020/bdba0d8d-d2e6-4ca7-bde6-a1833065d2fd.gif",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/1025appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-7eea94673752d1225dc641ef9edc",
+      "action": "repair_image",
+      "productId": "auto-7eea94673752d1225dc641ef9edc",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20261001/6851b295-4f15-4121-bad1-d319e8a4398d.png",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/1011appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-1c85ff8d2cab652b007cfdece499",
+      "action": "repair_image",
+      "productId": "auto-1c85ff8d2cab652b007cfdece499",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20261001/3ad6fd2d-e056-4f41-875b-c2221c26e87d.png",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/1011appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-cf43edc64a515bd24d9fed77f8dd",
+      "action": "repair_image",
+      "productId": "auto-cf43edc64a515bd24d9fed77f8dd",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20261001/20d4de9e-12b6-43d7-952c-d42fe73eea6b.png",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/1011appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-3cb7fb83966e92899ab04ed8a958",
+      "action": "repair_image",
+      "productId": "auto-3cb7fb83966e92899ab04ed8a958",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20261015/4c8e15c1-c6a5-4e95-9197-2093bb567e53.gif",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/1015appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-80b8c38badf95f87dfe57e87effb",
+      "action": "repair_image",
+      "productId": "auto-80b8c38badf95f87dfe57e87effb",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20260929/2977d2e9-0bd7-4f07-8c37-3b6195793297.gif",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/1004appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-48475c9a2678b8feb0c5748e9aed",
+      "action": "repair_image",
+      "productId": "auto-48475c9a2678b8feb0c5748e9aed",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20260922/317978de-1f17-4f19-a4d2-cba7d0076f8c.png",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/925appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-82b4848aedd6557a18f86b11e7fc",
+      "action": "repair_image",
+      "productId": "auto-82b4848aedd6557a18f86b11e7fc",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20260922/5ca9709f-c850-4e04-9070-aa89f8300ee8.png",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/925appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-1d15e947f67a3ecee8562bfeca42",
+      "action": "repair_image",
+      "productId": "auto-1d15e947f67a3ecee8562bfeca42",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20260914/0bc96059-55e4-4534-a94b-7e1a69bc3db9.png",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/916appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-114f50d073063e3b248940e5b7b5",
+      "action": "repair_image",
+      "productId": "auto-114f50d073063e3b248940e5b7b5",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20260914/f55dcf93-efcd-4f1d-bdf4-440ff8c798d2.png",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/916appearance.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-0e16361e578c09f3940e961f5d47",
+      "action": "repair_image",
+      "productId": "auto-0e16361e578c09f3940e961f5d47",
+      "revision": 1,
+      "image": "https://nie.res.netease.com/r/pic/20260918/2daba11f-eb83-433b-b7ff-55f0099fc740.gif",
+      "sourceUrl": "https://www.yysls.cn/news/official/20260918/37780_1314348.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-623f232092dcceaf6f8ba04e1fe9",
+      "action": "repair_image",
+      "productId": "auto-623f232092dcceaf6f8ba04e1fe9",
+      "revision": 1,
+      "image": "https://nie.res.netease.com/r/pic/20260918/b7ee09f0-762b-4ac0-933e-00898083cad7.jpg",
+      "sourceUrl": "https://www.yysls.cn/news/official/20260918/37780_1314348.html"
+    },
+    {
+      "requestId": "20261121-backfill-image-auto-6974beed2e1a16940c6c6ed1d049",
+      "action": "repair_image",
+      "productId": "auto-6974beed2e1a16940c6c6ed1d049",
+      "revision": 1,
+      "image": "https://r.res.easebar.com/pic/20261029/9cda4e5d-23e7-48ff-a79f-a9b1e7bc4334.jpg",
+      "sourceUrl": "https://www.wherewindsmeetgame.com/hmt/news/official/1029appearance.html"
     }
   ]
 }

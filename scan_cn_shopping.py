@@ -549,12 +549,13 @@ def maintenance(token):
     try:data=json.loads(path.read_text(encoding='utf-8'))
     except (ValueError,OSError):raise MonitorError('商品維護清單無法讀取。') from None
     requests=data.get('requests') if isinstance(data,dict) else None
-    if not isinstance(requests,list) or len(requests)>20:raise MonitorError('商品維護清單格式錯誤。')
+    if not isinstance(requests,list) or len(requests)>100:raise MonitorError('商品維護清單格式錯誤。')
     for item in requests:
-        if not isinstance(item,dict) or item.get('action') not in {'delete','republish','refresh_all'} or not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,79}',str(item.get('requestId',''))):raise MonitorError('商品維護操作格式錯誤。')
+        if not isinstance(item,dict) or item.get('action') not in {'delete','republish','refresh_all','repair_image'} or not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,79}',str(item.get('requestId',''))):raise MonitorError('商品維護操作格式錯誤。')
         result=json_request(SITE+'/api/products/maintenance',method='POST',body=item,headers={'Authorization':'Bearer '+token})
         if not result.get('ok'):raise MonitorError('商品維護未完成；沒有繼續推播。')
         if not result.get('alreadyProcessed'):print('商品維護已完成：'+item['action']+'；排入同步 '+str(result.get('queued',0))+' 件。')
+        if result.get('repaired'):print('商品圖片已修復：'+result['productId']+'｜'+result['name'])
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--mode',choices=['scan','preview'],default='scan');parser.add_argument('--scope',choices=['latest','full'],default='full');args=parser.parse_args()
