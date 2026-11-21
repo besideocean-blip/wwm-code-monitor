@@ -1,7 +1,8 @@
 name: Scan WWM CN shopping
 on:
   schedule:
-    - cron: '23 */3 * * *'
+    - cron: '8,23,38,53 * * * *'
+    - cron: '7 21 * * *'
   push:
     paths:
       - scan_cn_shopping.py
@@ -14,6 +15,11 @@ on:
         type: choice
         default: scan
         options: [scan, preview]
+      scope:
+        description: 'latest：兩服最新兩頁；full：兩服近 90 天完整補查'
+        type: choice
+        default: full
+        options: [latest, full]
       recover_message_url:
         description: '只有傳送後回執失敗時使用：貼上已存在的 Discord 訊息連結以復原，不會重送'
         type: string
@@ -40,7 +46,8 @@ jobs:
       - name: Collect CN shopping and deliver approved notices
         env:
           MODE: ${{ inputs.mode || 'scan' }}
+          SCAN_SCOPE: ${{ github.event_name == 'schedule' && github.event.schedule == '7 21 * * *' && 'full' || inputs.scope || 'latest' }}
           CN_SHOPPING_DISCORD_WEBHOOK_URLS: ${{ secrets.CN_SHOPPING_DISCORD_WEBHOOK_URLS }}
           RECOVER_MESSAGE_URL: ${{ inputs.recover_message_url }}
           PYTHONUNBUFFERED: '1'
-        run: python scan_cn_shopping.py --mode "$MODE"
+        run: python scan_cn_shopping.py --mode "$MODE" --scope "$SCAN_SCOPE"

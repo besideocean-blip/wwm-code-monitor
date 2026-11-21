@@ -551,12 +551,13 @@ def maintenance(token):
         if not result.get('alreadyProcessed'):print('商品維護已完成：'+item['action']+'；排入同步 '+str(result.get('queued',0))+' 件。')
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--mode',choices=['scan','preview'],default='scan');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--mode',choices=['scan','preview'],default='scan');parser.add_argument('--scope',choices=['latest','full'],default='full');args=parser.parse_args()
     try:
         recover_url=os.environ.get('RECOVER_MESSAGE_URL','').strip()
         if recover_url and args.mode=='scan':
             deliver(oidc_token(),recover_url);return 0
-        articles=collect()
+        print('收集範圍：'+('兩服最新公告（各兩頁）' if args.scope=='latest' else '兩服近 90 天完整補查'),file=sys.stderr)
+        articles=collect(pages=2 if args.scope=='latest' else None)
         if args.mode=='preview':
             print(json.dumps({'count':len(articles),'articles':[{'title':a['title'],'url':a['url'],'publishedAt':a['publishedAt']} for a in articles]},ensure_ascii=False,indent=2));return 0
         token=oidc_token();data={'added':0,'draftsCreated':0,'autoPublished':0}
@@ -569,7 +570,7 @@ def main():
         print(message)
         summary=os.environ.get('GITHUB_STEP_SUMMARY')
         if summary:
-            with open(summary,'a',encoding='utf-8') as f:f.write('## 陸服商品前瞻\n\n✅ '+message+'\n\n新商品會自動加入圖鑑並推播；資料標示自動整理，管理者可後續修正。\n')
+            with open(summary,'a',encoding='utf-8') as f:f.write('## 兩服商品前瞻\n\n✅ '+message+'\n\n新商品會自動加入圖鑑並推播；資料標示自動整理，管理者可後續修正。\n')
         return 0
     except MonitorError as e:
         print('ERROR: '+str(e),file=sys.stderr);return 1
