@@ -19,6 +19,7 @@ import urllib.request
 from html.parser import HTMLParser
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 SOURCE='https://www.yysls.cn/news/'
 SITE='https://ruanni-yanwu-teahouse.besideocean.chatgpt.site'
@@ -58,9 +59,14 @@ def response_error(url,raw):
 
 def source_url(value):
     u=urllib.parse.urlsplit(urllib.parse.urljoin(SOURCE,value))
-    if u.scheme!='https' or u.netloc!='www.yysls.cn' or not re.fullmatch(r'/news/(?:official|update|activity)/\d{8}/[\w-]+\.html',u.path):
-        raise MonitorError('公告出現未支援的來源網址。')
+    valid=(u.netloc=='www.yysls.cn' and re.fullmatch(r'/news/(?:official|update|activity)/\d{8}/[\w-]+\.html',u.path)) or (u.netloc=='www.wherewindsmeetgame.com' and re.fullmatch(r'/hmt/news/official/[\w-]+\.html',u.path))
+    if u.scheme!='https' or not valid:raise MonitorError('公告出現未支援的來源網址。')
     return urllib.parse.urlunsplit(('https',u.netloc,u.path,'',''))
+
+def shopping_article(text):
+    product=r'外[观觀]|套[装裝]|[时時][装裝]|[发髮]型|[战戰]令|[礼禮]包|商城|特效|配[饰飾]|坐[骑騎]'
+    sale=r'上架|上新|返[场場]|[开開]售|[贩販]售|[发發]售|[购購][买買得入]|[兑兌][换換]|抽取|抽[奖獎]|售[价價]|[优優]惠[价價]'
+    return bool(re.search(product,text) and re.search(sale,text))
 
 def clean(value): return ' '.join(value.split())
 
@@ -69,12 +75,16 @@ def official_video(value):
     return u.scheme=='https' and u.hostname in {'yysls.fp.ps.netease.com','nie.v.netease.com','nie.res.netease.com','www.yysls.cn','www.wherewindsmeetgame.com'} and not u.username and not u.password and u.port in {None,443} and bool(re.search(r'\.(?:mp4|webm)$',u.path,re.I))
 
 class ListParser(HTMLParser):
-    def __init__(self):
-        super().__init__(convert_charrefs=True);self.items=[];self.current=None;self.depth=0
+    def __init__(self,base=SOURCE):
+        self.base=base
+        super().__init__(convert_charrefs=True);self.items=[];self.current=None;self.depth=0;self.last_page=1
     def handle_starttag(self,tag,attrs):
         a=dict(attrs)
+        if str(a.get('data-all','')).isdigit():self.last_page=int(a['data-all'])
         if tag=='a' and 'news' in (a.get('class') or '').split():
-            self.current={'url':source_url(a.get('href') or ''),'title':clean(a.get('title') or ''),'summary':'','image':'','publishedAt':''};self.parts=[]
+            try:url=source_url(urllib.parse.urljoin(self.base,a.get('href') or ''))
+            except MonitorError:return
+            self.current={'url':url,'title':clean(a.get('title') or ''),'summary':'','image':'','publishedAt':''};self.parts=[]
         if self.current is not None:
             if tag=='img' and not self.current['image']:self.current['image']=a.get('src') or ''
             if tag not in VOID:self.depth+=1
@@ -84,6 +94,11 @@ class ListParser(HTMLParser):
         if self.current is None:return
         if tag=='a':
             self.current['summary']=clean(' '.join(self.parts))[:800]
+            date=re.search(r'/(20\d{2})(\d{2})(\d{2})/',self.current['url'])
+            if date:self.current['publishedAt']='-'.join(date.groups())
+            else:
+                date=re.search(r'(\d{2})\.(\d{2})\s+(20\d{2})',self.current['summary'])
+                if date:self.current['publishedAt']=date[3]+'-'+date[1]+'-'+date[2]
             if self.current['title']:self.items.append(self.current)
             self.current=None;self.depth=0
         elif tag not in VOID:self.depth=max(0,self.depth-1)
@@ -145,24 +160,32 @@ def json_request(url,**kwargs):
     try:return json.loads(request(url,**kwargs))
     except (ValueError,UnicodeError):raise MonitorError('服務未回傳有效 JSON。') from None
 
-def collect(pages=2):
-    items={}
-    for page in range(1,pages+1):
-        url=SOURCE if page==1 else SOURCE+f'index_{page}.html'
-        parser=ListParser();parser.feed(request(url).decode('utf-8'))
-        if not parser.items:raise MonitorError('陸服公告列表未解析出項目，可能版型改變。')
-        for item in parser.items:
-            if KEYWORDS.search(item['title']+' '+item['summary']):items[item['url']]=item
-    result=[]
-    for item in items.values():
+def collect(pages=None,now=None):
+    today=(now or datetime.now(timezone(timedelta(hours=8)))).date()
+    cutoff=(today-timedelta(days=89)).isoformat();items={}
+    for base in [SOURCE,'https://www.wherewindsmeetgame.com/hmt/news/']:
+        for page in range(1,(pages or 100)+1):
+            url=base if page==1 else base+f'index_{page}.html'
+            parser=ListParser(base);parser.feed(request(url).decode('utf-8'))
+            if not parser.items:raise MonitorError('公告列表未解析出項目，可能版型改變。')
+            for item in parser.items:
+                if not item['publishedAt']:raise MonitorError('公告列表日期未解析，未送出不完整結果。')
+                if cutoff<=item['publishedAt']<=today.isoformat():items[item['url']]=item
+            print('公告翻頁：'+base+' 第 '+str(page)+' 頁',file=sys.stderr)
+            if all(i['publishedAt']<cutoff for i in parser.items) or page>=parser.last_page:break
+        else:
+            if pages is None:raise MonitorError('公告超過安全翻頁上限，未宣稱完整涵蓋 90 天。')
+    def detail(item):
         parser=DetailParser();parser.feed(request(item['url']).decode('utf-8'))
         text=parser.text()
         if not text:raise MonitorError('公告內文未完整讀取；未送出部分結果。')
-        item['text']=text;item['publishedAt']=parser.date;item['media']=parser.media[:80]
+        if not shopping_article(item['title']+'\n'+text):return None
+        item={**item,'text':text,'publishedAt':parser.date or item['publishedAt'],'media':parser.media[:80]}
+        if not cutoff<=item['publishedAt']<=today.isoformat():return None
         if parser.images:item['image']=parser.images[0]
-        result.append(item)
-        time.sleep(.15)
-    return result
+        return item
+    with ThreadPoolExecutor(max_workers=6) as pool:result=list(pool.map(detail,items.values()))
+    return sorted([i for i in result if i],key=lambda i:(i['publishedAt'],i['url']))
 
 def oidc_token():
     url=os.environ.get('ACTIONS_ID_TOKEN_REQUEST_URL','');token=os.environ.get('ACTIONS_ID_TOKEN_REQUEST_TOKEN','')
@@ -505,7 +528,10 @@ def main():
         articles=collect()
         if args.mode=='preview':
             print(json.dumps({'count':len(articles),'articles':[{'title':a['title'],'url':a['url'],'publishedAt':a['publishedAt']} for a in articles]},ensure_ascii=False,indent=2));return 0
-        token=oidc_token();data=json_request(SITE+'/api/products/ingest',method='POST',body={'articles':articles,'runId':os.environ.get('GITHUB_RUN_ID','')},headers={'Authorization':'Bearer '+token})
+        token=oidc_token();data={'added':0,'draftsCreated':0,'autoPublished':0}
+        for start in range(0,max(1,len(articles)),5):
+            batch=json_request(SITE+'/api/products/ingest',method='POST',body={'articles':articles[start:start+5],'runId':os.environ.get('GITHUB_RUN_ID','')},headers={'Authorization':'Bearer '+token})
+            for key in data:data[key]+=batch.get(key,0)
         maintenance(token)
         sent=deliver(token)
         message=f'已檢查 {len(articles)} 篇購物相關公告；新增公告 {data["added"]} 篇；自動新增商品 {data.get("draftsCreated",0)} 件；自動發布 {data.get("autoPublished",0)} 件；Discord 同步 {sent} 則。'
