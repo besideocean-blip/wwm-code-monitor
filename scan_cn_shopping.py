@@ -74,6 +74,12 @@ def official_video(value):
     u=urllib.parse.urlsplit(value)
     return u.scheme=='https' and u.hostname in {'yysls.fp.ps.netease.com','nie.v.netease.com','nie.res.netease.com','www.yysls.cn','www.wherewindsmeetgame.com'} and not u.username and not u.password and u.port in {None,443} and bool(re.search(r'\.(?:mp4|webm)$',u.path,re.I))
 
+def official_image(value):
+    try:
+        u=urllib.parse.urlsplit(value)
+        return u.scheme=='https' and u.hostname in {'nie.res.netease.com','r.res.easebar.com','www.yysls.cn','www.wherewindsmeetgame.com'} and not u.username and not u.password and u.port in {None,443}
+    except ValueError:return False
+
 class ListParser(HTMLParser):
     def __init__(self,base=SOURCE):
         self.base=base
@@ -111,7 +117,7 @@ class DetailParser(HTMLParser):
         if 'artText' in classes or 'art-text' in classes:self.article_depth=len(self.stack)+1
         if tag not in VOID:self.stack.append(tag)
         if self.article_depth:
-            if tag=='img' and (a.get('src') or '').startswith('https://nie.res.netease.com/') and not re.search(r'video_cover_default|loading|spacer',a['src'],re.I):
+            if tag=='img' and official_image(a.get('src') or '') and not re.search(r'video_cover_default|loading|spacer',a['src'],re.I):
                 self.images.append(a['src'])
                 self.media.append({'url':a['src'],'kind':'image','context':clean(''.join(self.parts)[-300:])[-240:]})
             video=a.get('data-movieurl') or (a.get('src') if tag in {'video','source'} else '')
