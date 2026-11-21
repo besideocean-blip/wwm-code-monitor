@@ -224,7 +224,7 @@ def webhooks(value):
 
 def snowflake(value):return isinstance(value,str) and re.fullmatch(r'[0-9]{17,20}',value) is not None
 
-PRODUCT_TAG_NAMES=('套裝','髮型','武器外觀','配飾','武學特效','奇術特效','坐騎','資源禮包','其他')
+PRODUCT_TAG_NAMES=('套裝','髮型','武器外觀','伙伴配飾','武學特效','奇術特效','坐騎','資源禮包','其他')
 
 def forum_tag_config():
     path=Path(__file__).with_name('discord-product-tags.json')
@@ -240,6 +240,7 @@ def forum_tag_config():
 
 def product_tag_ids(notice,tags):
     category=(notice.get('product') or {}).get('category','其他')
+    if category=='配飾':category='伙伴配飾'
     name=category if category in PRODUCT_TAG_NAMES else '其他'
     return [tags[name]] if name in tags else []
 
@@ -436,6 +437,8 @@ def forum_payload_before_pool_rename(notice,is_update=False,legacy=False,listing
     return payload
 
 def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
+    if (notice.get('product') or {}).get('category')=='配飾':
+        notice={**notice,'product':{**notice['product'],'category':'伙伴配飾'}}
     payload=forum_payload_before_pool_rename(notice,is_update,legacy,listing_dates)
     for embed in payload['embeds']:
         for field in embed.get('fields',[]):
