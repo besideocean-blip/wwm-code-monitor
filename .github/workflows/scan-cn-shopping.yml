@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - scan_cn_shopping.py
+      - discord-product-tags.json
       - .github/workflows/scan-cn-shopping.yml
   workflow_dispatch:
     inputs:

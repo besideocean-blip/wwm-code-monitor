@@ -218,6 +218,25 @@ def webhooks(value):
 
 def snowflake(value):return isinstance(value,str) and re.fullmatch(r'[0-9]{17,20}',value) is not None
 
+PRODUCT_TAG_NAMES=('套裝','髮型','武器外觀','配飾','武學特效','奇術特效','坐騎','資源禮包','其他')
+
+def forum_tag_config():
+    path=Path(__file__).with_name('discord-product-tags.json')
+    if not path.exists():return {}
+    try:data=json.loads(path.read_text(encoding='utf-8'))
+    except (ValueError,OSError):raise MonitorError('商品論壇標籤設定無法讀取。') from None
+    channels=data.get('channels') if isinstance(data,dict) else None
+    if not isinstance(channels,dict) or len(channels)>10:raise MonitorError('商品論壇標籤設定格式不正確。')
+    for channel,tags in channels.items():
+        if not snowflake(channel) or not isinstance(tags,dict) or set(tags)!=set(PRODUCT_TAG_NAMES) or not all(snowflake(v) for v in tags.values()) or len(set(tags.values()))!=len(PRODUCT_TAG_NAMES):
+            raise MonitorError('每個商品論壇需設定完整且不重複的九種商品類型標籤 ID。')
+    return channels
+
+def product_tag_ids(notice,tags):
+    category=(notice.get('product') or {}).get('category','其他')
+    name=category if category in PRODUCT_TAG_NAMES else '其他'
+    return [tags[name]] if name in tags else []
+
 def forum_targets(hooks):
     targets=[]
     for hook in hooks:
@@ -448,6 +467,9 @@ def deliver(token,recover_url=''):
         print('::notice::已同步待整理公告；尚未設定商品論壇 Webhook，未發送任何 Discord 訊息。')
         return 0
     destinations=forum_targets(hooks);targets=[t['destination'] for t in destinations]
+    tag_config=forum_tag_config()
+    for t in destinations:
+        if t['channelId'] not in tag_config:print('::notice::商品論壇尚未綁定標籤 ID；目前發文不套用標籤，等待 Discord 管理端設定。')
     headers={'Authorization':'Bearer '+token}
     data=json_request(SITE+'/api/products/notifications',headers=headers)
     def receipt(notice,t,action,**extra):
@@ -481,7 +503,10 @@ def deliver(token,recover_url=''):
                     body={key:payload[key] for key in ['content','embeds','allowed_mentions']}
                     return json_request(t['hook']+'/messages/'+thread_id+'?thread_id='+thread_id,method='PATCH',body=body)
                 if thread_id:query['thread_id']=thread_id
-                else:payload['thread_name']=('【'+(notice.get('product') or {}).get('category','商品')+'】'+notice['name'])[:100]
+                else:
+                    payload['thread_name']=('【'+(notice.get('product') or {}).get('category','商品')+'】'+notice['name'])[:100]
+                    tags=product_tag_ids(notice,tag_config.get(t['channelId'],{}))
+                    if tags:payload['applied_tags']=tags
                 return json_request(t['hook']+'?'+urllib.parse.urlencode(query),method='POST',body=payload)
             rejected={400,401,403,404,405,413,415,429}
             try:result=send_to_thread(thread)
