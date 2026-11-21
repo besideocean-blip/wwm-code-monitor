@@ -440,6 +440,9 @@ def forum_payload(notice,is_update=False,legacy=False,listing_dates=True):
     for embed in payload['embeds']:
         for field in embed.get('fields',[]):
             if field['name']=='取得方式':field['value']=field['value'].replace('活動抽取','轉盤獎池')
+    p=notice.get('product') or {};label={'武器外觀':'對應武器','武學特效':'對應武學','奇術特效':'對應奇術'}.get(p.get('category'))
+    if label and p.get('baseName'):
+        payload['embeds'][0]['fields'].insert(0,{'name':label,'value':p['baseName'][:80],'inline':True})
     return payload
 
 def message_matches_payload(message,payload):
