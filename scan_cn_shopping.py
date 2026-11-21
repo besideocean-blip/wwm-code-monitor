@@ -470,6 +470,7 @@ def deliver(token,recover_url=''):
     tag_config=forum_tag_config()
     for t in destinations:
         if t['channelId'] not in tag_config:print('::notice::商品論壇尚未綁定標籤 ID；目前發文不套用標籤，等待 Discord 管理端設定。')
+        else:print('商品論壇已載入九種分類標籤設定：'+t['channelId'])
     headers={'Authorization':'Bearer '+token}
     data=json_request(SITE+'/api/products/notifications',headers=headers)
     def receipt(notice,t,action,**extra):
@@ -528,6 +529,8 @@ def deliver(token,recover_url=''):
             stored=json_request(t['hook']+'/messages/'+result['id']+'?thread_id='+result['channel_id']) if thread else result
             if not message_matches_payload(stored,expected):
                 raise MonitorError('Discord 首篇內容核對未通過，已保留待確認狀態；未建立其他貼文。')
+            if not thread and product_tag_ids(notice,tag_config.get(t['channelId'],{})):
+                print('新商品首篇已帶入分類標籤：'+notice['productId']+'；'+(notice.get('product') or {}).get('category','其他'))
             receipt(notice,t,'complete',guildId=t['guildId'],threadId=result['channel_id'],messageId=result['id'])
             print('已核對商品首篇：'+notice['productId']+'；'+str(len(expected['embeds']))+' 張卡片。')
             if recreated:print('原商品論壇貼文不存在，已重新建立貼文；後續更新沿用新篇：https://discord.com/channels/'+t['guildId']+'/'+result['channel_id'])
