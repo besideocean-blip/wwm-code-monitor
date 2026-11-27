@@ -143,7 +143,7 @@ class DetailParser(HTMLParser):
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,*args,**kwargs):return None
 
-def request(url,method='GET',body=None,headers=None):
+def request(url,method='GET',body=None,headers=None,max_bytes=8*1024*1024):
     payload=None if body is None else json.dumps(body,ensure_ascii=False).encode()
     h={'User-Agent':'WWM-CN-Shopping-Monitor/1.0','Accept-Encoding':'identity'};h.update(headers or {})
     if payload is not None:h['Content-Type']='application/json; charset=utf-8'
@@ -151,8 +151,8 @@ def request(url,method='GET',body=None,headers=None):
     for n in range(attempts):
         try:
             req=urllib.request.Request(url,data=payload,method=method,headers=h)
-            with urllib.request.build_opener(NoRedirect()).open(req,timeout=25) as response:raw=response.read(8*1024*1024+1)
-            if len(raw)>8*1024*1024:raise MonitorError('來源回應超出大小限制。')
+            with urllib.request.build_opener(NoRedirect()).open(req,timeout=25) as response:raw=response.read(max_bytes+1)
+            if len(raw)>max_bytes:raise MonitorError('來源回應超出大小限制。')
             return raw
         except urllib.error.HTTPError as e:
             code=e.code
@@ -172,29 +172,30 @@ def json_request(url,**kwargs):
 
 OCR_SLOTS=threading.Semaphore(2)
 
-def image_article_text(images):
+def image_article_text(images,language='chi_tra'):
     """Read image-only official announcements locally; no external AI or secrets."""
     if not images or not shutil.which('tesseract'):return ''
     texts=[]
     for url in list(dict.fromkeys(images))[:2]:
         if not official_image(url):continue
         try:
-            raw=request(url)
+            raw=request(url,max_bytes=32*1024*1024)
             cache=Path(os.environ.get('OCR_CACHE_DIR','/tmp/wwm-announcement-ocr'))
             cache.mkdir(parents=True,exist_ok=True)
-            cached=cache/(hashlib.sha256(raw).hexdigest()+'.txt')
+            cached=cache/(hashlib.sha256(raw+language.encode()).hexdigest()+'.txt')
             if cached.exists():
                 texts.append(cached.read_text(encoding='utf-8')[:100000]);continue
             with OCR_SLOTS,tempfile.TemporaryDirectory(prefix='wwm-ocr-') as directory:
                 source=Path(directory)/'source';source.write_bytes(raw)
-                result=subprocess.run(['tesseract',str(source),'stdout','-l','chi_tra+chi_sim+eng','--psm','11'],capture_output=True,timeout=60,check=True)
+                result=subprocess.run(['tesseract',str(source),'stdout','-l',language+'+eng','--psm','11'],capture_output=True,timeout=60,check=True)
                 text=result.stdout.decode('utf-8')[:100000]
                 # OCR inserts spaces between Chinese glyphs; keep meaningful line breaks.
                 text=re.sub(r'(?<=[\u3400-\u9fff])[^\S\n]+(?=[\u3400-\u9fff])','',text)
                 texts.append(text)
                 if text.strip():cached.write_text(text,encoding='utf-8')
-        except (MonitorError,OSError,subprocess.SubprocessError,UnicodeError):
-            print('::warning::圖片公告文字辨識未完成，保留來源等待下次補查。',file=sys.stderr)
+        except (MonitorError,OSError,subprocess.SubprocessError,UnicodeError) as error:
+            reason='辨識逾時' if isinstance(error,subprocess.TimeoutExpired) else '圖片超過讀取上限' if '超出大小限制' in str(error) else '圖片下載或辨識失敗'
+            print('::warning::'+reason+'，保留來源等待下次補查。',file=sys.stderr)
     return '\n'.join(texts)[:100000]
 
 def collect(pages=None,now=None):
@@ -216,7 +217,7 @@ def collect(pages=None,now=None):
         parser=DetailParser();parser.feed(request(item['url']).decode('utf-8'))
         text=parser.text();method='html'
         if not text and parser.images:
-            text=image_article_text(parser.images)
+            text=image_article_text(parser.images,'chi_sim' if 'www.yysls.cn/' in item['url'] else 'chi_tra')
             if text:method='image-ocr'
         unavailable=not text
         if unavailable:
