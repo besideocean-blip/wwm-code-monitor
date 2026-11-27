@@ -187,7 +187,7 @@ def image_article_text(images,language='chi_tra'):
                 texts.append(cached.read_text(encoding='utf-8')[:100000]);continue
             with OCR_SLOTS,tempfile.TemporaryDirectory(prefix='wwm-ocr-') as directory:
                 source=Path(directory)/'source';source.write_bytes(raw)
-                result=subprocess.run(['tesseract',str(source),'stdout','-l',language+'+eng','--psm','11'],capture_output=True,timeout=60,check=True)
+                result=subprocess.run(['tesseract',str(source),'stdout','-l',language+'+eng','--psm','11'],capture_output=True,timeout=60,check=True,env={**os.environ,'OMP_THREAD_LIMIT':'1'})
                 text=result.stdout.decode('utf-8')[:100000]
                 # OCR inserts spaces between Chinese glyphs; keep meaningful line breaks.
                 text=re.sub(r'(?<=[\u3400-\u9fff])[^\S\n]+(?=[\u3400-\u9fff])','',text)
