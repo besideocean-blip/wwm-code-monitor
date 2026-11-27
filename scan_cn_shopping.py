@@ -13,6 +13,10 @@ import os
 import re
 import sys
 import time
+import subprocess
+import tempfile
+import shutil
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -65,7 +69,7 @@ def source_url(value):
 
 def shopping_article(text):
     product=r'外[观觀]|套[装裝]|[时時][装裝]|[发髮]型|[战戰]令|[礼禮]包|商城|特效|配[饰飾]|坐[骑騎]'
-    sale=r'上架|上新|返[场場]|[开開]售|[贩販]售|[发發]售|[购購][买買得入]|[兑兌][换換]|抽取|抽[奖獎]|售[价價]|[优優]惠[价價]'
+    sale=r'上架|上新|上[线線]|登[场場]|推出|返[场場]|[开開]售|[贩販]售|[发發]售|[购購][买買得入]|[兑兌][换換]|抽取|抽[奖獎]|售[价價]|[优優]惠[价價]'
     return bool(re.search(product,text) and re.search(sale,text))
 
 def clean(value): return ' '.join(value.split())
@@ -166,6 +170,33 @@ def json_request(url,**kwargs):
     try:return json.loads(request(url,**kwargs))
     except (ValueError,UnicodeError):raise MonitorError('服務未回傳有效 JSON。') from None
 
+OCR_SLOTS=threading.Semaphore(2)
+
+def image_article_text(images):
+    """Read image-only official announcements locally; no external AI or secrets."""
+    if not images or not shutil.which('tesseract'):return ''
+    texts=[]
+    for url in list(dict.fromkeys(images))[:2]:
+        if not official_image(url):continue
+        try:
+            raw=request(url)
+            cache=Path(os.environ.get('OCR_CACHE_DIR','/tmp/wwm-announcement-ocr'))
+            cache.mkdir(parents=True,exist_ok=True)
+            cached=cache/(hashlib.sha256(raw).hexdigest()+'.txt')
+            if cached.exists():
+                texts.append(cached.read_text(encoding='utf-8')[:100000]);continue
+            with OCR_SLOTS,tempfile.TemporaryDirectory(prefix='wwm-ocr-') as directory:
+                source=Path(directory)/'source';source.write_bytes(raw)
+                result=subprocess.run(['tesseract',str(source),'stdout','-l','chi_tra+chi_sim+eng','--psm','11'],capture_output=True,timeout=60,check=True)
+                text=result.stdout.decode('utf-8')[:100000]
+                # OCR inserts spaces between Chinese glyphs; keep meaningful line breaks.
+                text=re.sub(r'(?<=[\u3400-\u9fff])[^\S\n]+(?=[\u3400-\u9fff])','',text)
+                texts.append(text)
+                if text.strip():cached.write_text(text,encoding='utf-8')
+        except (MonitorError,OSError,subprocess.SubprocessError,UnicodeError):
+            print('::warning::圖片公告文字辨識未完成，保留來源等待下次補查。',file=sys.stderr)
+    return '\n'.join(texts)[:100000]
+
 def collect(pages=None,now=None):
     today=(now or datetime.now(timezone(timedelta(hours=8)))).date()
     cutoff=(today-timedelta(days=89)).isoformat();items={}
@@ -183,13 +214,16 @@ def collect(pages=None,now=None):
             if pages is None:raise MonitorError('公告超過安全翻頁上限，未宣稱完整涵蓋 90 天。')
     def detail(item):
         parser=DetailParser();parser.feed(request(item['url']).decode('utf-8'))
-        text=parser.text()
+        text=parser.text();method='html'
+        if not text and parser.images:
+            text=image_article_text(parser.images)
+            if text:method='image-ocr'
         unavailable=not text
         if unavailable:
             print('::warning::公告無標準內文，保留商品摘要供手動整理：'+item['url'],file=sys.stderr)
             text=item['summary']
         if not shopping_article(item['title']+'\n'+text):return None
-        item={**item,'text':text,'contentUnavailable':unavailable,'publishedAt':parser.date or item['publishedAt'],'media':parser.media[:80]}
+        item={**item,'text':text,'contentUnavailable':unavailable,'contentMethod':method,'publishedAt':parser.date or item['publishedAt'],'media':parser.media[:80]}
         if not cutoff<=item['publishedAt']<=today.isoformat():return None
         if parser.images:item['image']=parser.images[0]
         return item
